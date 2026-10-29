@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from . import csv_io
-from .models import AccountValuation, ImportResult, TransactionFilter
+from .models import AccountValuation, ImportResult, TransactionBalance, TransactionFilter
 from .money import CURRENCIES, format_cents, format_compact, format_percentage
 from .rates import RateSnapshot, RateStore
 from .repository import Repository
@@ -102,6 +102,11 @@ class FinanceService(QObject):
     def delete_transaction(self, transaction_id: int) -> None:
         self.repo.delete_transaction(transaction_id)
         self.changed.emit()
+
+    def transaction_balances(
+        self, transaction_ids: list[int]
+    ) -> dict[int, TransactionBalance]:
+        return self.repo.transaction_balances(transaction_ids)
 
     # ---------------------------------------------------------------- accounts
     def add_account(

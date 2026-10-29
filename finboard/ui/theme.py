@@ -693,6 +693,10 @@ QCalendarWidget QAbstractItemView {
     selection-background-color: $primary;
     selection-color: #FFFFFF;
 }
+QCalendarWidget QTableView::item {
+    padding: 0;
+    border: none;
+}
 QCalendarWidget QToolButton {
     color: $text;
     background: transparent;

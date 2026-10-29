@@ -35,6 +35,7 @@ from .models import (
     NetWorth,
     PayeeSpend,
     Transaction,
+    TransactionBalance,
     TransactionFilter,
 )
 from .money import CURRENCIES, MAX_AMOUNT_CENTS
@@ -560,6 +561,124 @@ class Repository:
             (*params, limit),
         ).fetchall()
         return [self._transaction(row) for row in rows]
+
+    def transaction_balances(
+        self, transaction_ids: Iterable[int] | None = None
+    ) -> dict[int, TransactionBalance]:
+        """Return the account balance right after each requested transaction.
+
+        The ledger is replayed in posting order so filtered views still show
+        the real balance rather than a subtotal of the visible rows.  For
+        investment accounts, a valuation dated on the transaction day is the
+        end-of-day balance (it already includes that day's trades); later
+        snapshots are treated as a new baseline.
+        """
+        wanted: set[int] | None = None
+        if transaction_ids is not None:
+            wanted = {int(value) for value in transaction_ids}
+            if not wanted:
+                return {}
+
+        opening = {
+            int(row["id"]): int(row["opening_balance"])
+            for row in self.conn.execute("SELECT id, opening_balance FROM accounts")
+        }
+        if not opening:
+            return {}
+        rows = self.conn.execute(
+            "SELECT id, date, kind, account_id, to_account_id,"
+            " account_amount, to_amount, fee FROM transactions"
+            " ORDER BY date, id"
+        ).fetchall()
+        if not rows:
+            return {}
+
+        valuations: dict[int, list[tuple[str, int]]] = {}
+        for row in self.conn.execute(
+            "SELECT account_id, date, value FROM account_valuations"
+            " ORDER BY account_id, date"
+        ):
+            valuations.setdefault(int(row["account_id"]), []).append(
+                (row["date"], int(row["value"]))
+            )
+
+        ledger = dict(opening)
+        running: dict[int, tuple[int, int | None]] = {}
+        history: dict[int, list[tuple[str, int]]] = {}
+        for row in rows:
+            txn_id = int(row["id"])
+            account_id = int(row["account_id"])
+            target_id = (
+                int(row["to_account_id"]) if row["to_account_id"] is not None else None
+            )
+            amount = int(row["account_amount"] or 0)
+            if row["kind"] == "income":
+                ledger[account_id] = ledger.get(account_id, 0) + amount
+            elif row["kind"] == "expense":
+                ledger[account_id] = ledger.get(account_id, 0) - amount
+            else:
+                ledger[account_id] = (
+                    ledger.get(account_id, 0) - amount - int(row["fee"] or 0)
+                )
+                if target_id is not None:
+                    ledger[target_id] = (
+                        ledger.get(target_id, 0) + int(row["to_amount"] or 0)
+                    )
+            running[txn_id] = (
+                ledger[account_id],
+                ledger.get(target_id) if target_id is not None else None,
+            )
+            history.setdefault(account_id, []).append(
+                (row["date"], ledger[account_id])
+            )
+            if target_id is not None:
+                history.setdefault(target_id, []).append(
+                    (row["date"], ledger[target_id])
+                )
+
+        def effective(account_id: int, day: str, ledger_value: int) -> int:
+            series = valuations.get(account_id)
+            if not series:
+                return ledger_value
+            snapshot: tuple[str, int] | None = None
+            for item in series:
+                if item[0] <= day:
+                    snapshot = item
+                else:
+                    break
+            if snapshot is None:
+                return ledger_value
+            snapshot_day, snapshot_value = snapshot
+            if snapshot_day == day:
+                return snapshot_value
+            base = opening[account_id]
+            for entry_day, entry_balance in reversed(history.get(account_id, [])):
+                if entry_day <= snapshot_day:
+                    base = entry_balance
+                    break
+            return snapshot_value + ledger_value - base
+
+        result: dict[int, TransactionBalance] = {}
+        for row in rows:
+            txn_id = int(row["id"])
+            if wanted is not None and txn_id not in wanted:
+                continue
+            source_balance, target_balance = running[txn_id]
+            source_id = int(row["account_id"])
+            target_id = (
+                int(row["to_account_id"]) if row["to_account_id"] is not None else None
+            )
+            result[txn_id] = TransactionBalance(
+                account_balance=effective(
+                    source_id, row["date"], source_balance
+                ),
+                to_account_balance=(
+                    effective(target_id, row["date"], target_balance)
+                    if target_id is not None and target_balance is not None
+                    else None
+                ),
+            )
+        return result
 
     def count_transactions(self, filters: TransactionFilter | None = None) -> int:
         filters = filters or TransactionFilter()

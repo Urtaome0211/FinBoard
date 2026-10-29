@@ -156,6 +156,14 @@ class Transaction:
 
 
 @dataclass(frozen=True)
+class TransactionBalance:
+    """Account balances immediately after a transaction was posted."""
+
+    account_balance: int
+    to_account_balance: int | None = None
+
+
+@dataclass(frozen=True)
 class MonthStats:
     month: str
     income: int

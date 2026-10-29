@@ -6,11 +6,11 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import QStyledItemDelegate, QStyle, QStyleOptionViewItem
 
-from ..core.models import KIND_LABELS, Transaction
+from ..core.models import KIND_LABELS, Transaction, TransactionBalance
 from ..core.service import FinanceService
 from .theme import colors
 
-_HEADERS = ("日期", "类型", "交易", "分类", "账户", "金额", "手续费")
+_HEADERS = ("日期", "类型", "交易", "分类", "账户", "金额", "余额", "手续费")
 
 
 class TransactionTableModel(QAbstractTableModel):
@@ -18,6 +18,7 @@ class TransactionTableModel(QAbstractTableModel):
         super().__init__(parent)
         self.service = service
         self._rows: list[Transaction] = []
+        self._balances: dict[int, TransactionBalance] = {}
         self._dot_cache: dict[str, QPixmap] = {}
 
     # ------------------------------------------------------------- Qt plumbing
@@ -69,23 +70,40 @@ class TransactionTableModel(QAbstractTableModel):
                     money += f" {txn.currency}"
                 return money
             if column == 6:
+                balance = self._balances.get(txn.id)
+                if balance is None:
+                    return "—"
+                money = self.service.format_money(
+                    balance.account_balance, txn.account_currency
+                )
+                if txn.account_currency != self.service.currency:
+                    money += f" {txn.account_currency}"
+                return money
+            if column == 7:
                 if txn.kind == "transfer" and txn.fee:
                     return self.service.format_money(txn.fee, txn.account_currency)
                 return ""
         if role == Qt.ItemDataRole.TextAlignmentRole:
-            if column in (5, 6):
+            if column in (5, 6, 7):
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             if column == 1:
                 return int(Qt.AlignmentFlag.AlignCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ForegroundRole:
             palette = colors()
-            if column == 6:
+            if column == 7:
                 return QColor(palette.expense) if txn.fee else QColor(palette.faint)
             if column == 5:
                 if txn.kind == "income":
                     return QColor(palette.income)
                 if txn.kind == "expense":
+                    return QColor(palette.expense)
+                return QColor(palette.muted)
+            if column == 6:
+                balance = self._balances.get(txn.id)
+                if balance is None:
+                    return QColor(palette.faint)
+                if balance.account_balance < 0:
                     return QColor(palette.expense)
                 return QColor(palette.muted)
             if column in (0, 1):
@@ -94,7 +112,7 @@ class TransactionTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.FontRole:
             font = QFont()
             font.setPixelSize(13)
-            if column in (5, 6):
+            if column in (5, 6, 7):
                 font.setWeight(QFont.Weight.DemiBold)
             elif column == 2:
                 font.setWeight(QFont.Weight.Medium)
@@ -119,6 +137,21 @@ class TransactionTableModel(QAbstractTableModel):
                     f"\n手续费 {self.service.format_money(txn.fee, txn.account_currency)}"
                     "（从转出账户扣除）"
                 )
+            balance = self._balances.get(txn.id)
+            if balance is not None:
+                detail += (
+                    "\n动账后余额 "
+                    + self.service.format_money(
+                        balance.account_balance, txn.account_currency
+                    )
+                )
+                if balance.to_account_balance is not None:
+                    detail += (
+                        "\n转入后余额 "
+                        + self.service.format_money(
+                            balance.to_account_balance, txn.to_account_currency
+                        )
+                    )
             return detail
         return None
 
@@ -138,9 +171,14 @@ class TransactionTableModel(QAbstractTableModel):
         return pixmap
 
     # ------------------------------------------------------------------ helpers
-    def set_transactions(self, rows: list[Transaction]) -> None:
+    def set_transactions(
+        self,
+        rows: list[Transaction],
+        balances: dict[int, TransactionBalance] | None = None,
+    ) -> None:
         self.beginResetModel()
         self._rows = list(rows)
+        self._balances = dict(balances or {})
         self.endResetModel()
 
     def transaction_at(self, row: int) -> Transaction | None:

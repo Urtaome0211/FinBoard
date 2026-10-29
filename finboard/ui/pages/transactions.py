@@ -114,12 +114,14 @@ class TransactionsPage(Page):
         header_view.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         header_view.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         header_view.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        header_view.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(0, 104)
         self.table.setColumnWidth(1, 86)
-        self.table.setColumnWidth(3, 108)
-        self.table.setColumnWidth(4, 205)
-        self.table.setColumnWidth(5, 180)
-        self.table.setColumnWidth(6, 90)
+        self.table.setColumnWidth(3, 100)
+        self.table.setColumnWidth(4, 210)
+        self.table.setColumnWidth(5, 165)
+        self.table.setColumnWidth(6, 118)
+        self.table.setColumnWidth(7, 80)
 
         self.empty = EmptyState(
             "list",
@@ -238,7 +240,8 @@ class TransactionsPage(Page):
             return
         filters = self.filters()
         rows = self.service.repo.transactions(filters)
-        self.model.set_transactions(rows)
+        balances = self.service.transaction_balances([row.id for row in rows])
+        self.model.set_transactions(rows, balances)
         count = self.service.repo.count_transactions(filters)
         self.header.set_subtitle(f"共 {count} 笔记录")
         if rows:

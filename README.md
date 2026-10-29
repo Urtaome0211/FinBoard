@@ -20,7 +20,7 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 ### 功能
 
 - **总览**：净资产、本月收入/支出/结余、资产与负债百分比环图、近 6 个月趋势、最近记录、预算进度。
-- **收支明细**：按月份、类型、账户、分类筛选，支持关键词搜索；双击编辑、右键删除、Delete 删除；CSV 导出。
+- **收支明细**：按月份、类型、账户、分类筛选，支持关键词搜索；每笔显示对应账户动账后的余额（转账显示转出账户余额）；双击编辑、右键删除、Delete 删除；CSV 导出。
 - **账户**：现金、储蓄卡、投资理财、信用卡、贷款五类账户；每个账户可设自己的币种；实时余额由期初余额和流水聚合得出；信用卡/贷款按欠款金额（正数）录入，自动计入负债；支持归档与恢复。
 - **投资市值**：投资理财账户可按日记录收盘总市值，账户余额自动变为「最新市值 + 市值日之后的流水」；带历史曲线、同日覆盖、删除重算，市值变动不计入收支。
 - **多币种**：账户级 + 交易级币种；按每个交易日的汇率折算后汇总，周末和节假日沿用最近一个工作日；基准币种可切换，总览/报表/预算统一按基准币种显示。
@@ -210,6 +210,7 @@ tests/test_core.py          # 金额/日期/仓储/CSV/服务层测试
 tests/test_rates.py         # 汇率、跨币种转账与币种 CSV 测试
 tests/test_fees.py          # 钱包提现手续费与统计测试
 tests/test_valuations.py    # 投资市值、快照后流水与余额锁定测试
+tests/test_balances.py      # 明细动账后余额、手续费、同日排序与快照边界测试
 tests/test_ui.py            # 账户/交易/市值对话框、自动更新汇率测试
 scripts/                    # 冒烟、截图、图标生成
 docs/                       # 截图与 logo
@@ -232,7 +233,7 @@ FinBoard.spec               # PyInstaller 构建配置
 ### 测试与构建
 
 ```bash
-# 单元测试（48 个）
+# 单元测试（53 个）
 python -m unittest discover -s tests
 
 # 核心冒烟（临时数据库、演示数据、CSV 往返）
@@ -277,7 +278,7 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 ### Features
 
 - **Dashboard**: net worth, monthly income/expense/balance, asset-vs-liability donut, 6-month trend, recent transactions and budget progress.
-- **Transactions**: filter by month, kind, account and category; search by payee/note; edit, delete, export to CSV.
+- **Transactions**: filter by month, kind, account and category; search by payee/note; each row shows the account balance after that posting (transfers show the source account); edit, delete, export to CSV.
 - **Accounts**: cash, debit card, investment, credit card and loan accounts, each with its own currency. Balances are aggregated from the opening balance and transactions in real time. Archive and restore are supported.
 - **Investment valuations**: record a closing market value per day for investment accounts. The balance becomes “latest snapshot + later transactions”, with a history chart, same-day overwrite and delete-to-recalculate. Market moves are not counted as income or expense.
 - **Multi-currency**: account-level and transaction-level currencies. Amounts are converted at the transaction-date rate, with weekend/holiday fallback to the latest business day. The base currency can be switched; dashboard, reports and budgets are shown in it.
@@ -443,7 +444,7 @@ Default location on Windows:
 ### Testing & build
 
 ```bash
-# 48 unit tests
+# 53 unit tests
 python -m unittest discover -s tests
 
 # Core smoke test (temporary DB, demo data, CSV round-trip)
