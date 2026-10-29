@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -102,6 +102,21 @@ SCHEMA_V3 = """
 ALTER TABLE transactions ADD COLUMN fee INTEGER NOT NULL DEFAULT 0 CHECK (fee >= 0);
 """
 
+SCHEMA_V4 = """
+CREATE TABLE IF NOT EXISTS account_valuations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    date       TEXT    NOT NULL,
+    value      INTEGER NOT NULL,
+    note       TEXT    NOT NULL DEFAULT '',
+    created_at TEXT    NOT NULL,
+    UNIQUE (account_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_valuations_account_date
+    ON account_valuations(account_id, date);
+"""
+
 
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
@@ -148,6 +163,9 @@ class Database:
         if version < 3:
             conn.executescript(SCHEMA_V3)
             version = 3
+        if version < 4:
+            conn.executescript(SCHEMA_V4)
+            version = 4
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

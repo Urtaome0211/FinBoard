@@ -68,6 +68,9 @@ class Account:
     archived: bool = False
     balance: int = 0
     currency: str = "CNY"
+    last_valuation: int | None = None
+    last_valuation_date: str = ""
+    valuation_count: int = 0
 
     @property
     def type_label(self) -> str:
@@ -84,6 +87,16 @@ class Account:
     @property
     def is_liability(self) -> bool:
         return self.group == "liability"
+
+
+@dataclass(frozen=True)
+class AccountValuation:
+    id: int
+    account_id: int
+    date: str
+    value: int
+    note: str = ""
+    created_at: str = ""
 
 
 @dataclass(frozen=True)

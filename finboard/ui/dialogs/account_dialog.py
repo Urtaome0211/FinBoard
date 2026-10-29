@@ -30,6 +30,7 @@ class AccountDialog(QDialog):
         super().__init__(parent)
         self.service = service
         self.account = account
+        self.valuation_count = account.valuation_count if account else 0
         self.setWindowTitle("编辑账户" if account else "新建账户")
         self.setModal(True)
         self.setMinimumWidth(500)
@@ -101,9 +102,14 @@ class AccountDialog(QDialog):
             index = self.currency_combo.findData(account.currency)
             if index >= 0:
                 self.currency_combo.setCurrentIndex(index)
-            if service.repo.account_usage(account.id):
+            if service.repo.account_usage(account.id) or self.valuation_count:
                 self.currency_combo.setEnabled(False)
                 self.currency_combo.setToolTip("已有记录，不能修改账户币种")
+            if self.valuation_count:
+                self.type_combo.setEnabled(False)
+                self.type_combo.setToolTip("账户已有市值记录，不能更改类型")
+                self.opening_input.setEnabled(False)
+                self.opening_input.setToolTip("余额由最新市值与后续流水决定")
             opening = (
                 abs(account.opening_balance)
                 if account.is_liability
@@ -134,6 +140,14 @@ class AccountDialog(QDialog):
         currency = self.currency_combo.currentData() or "CNY"
         symbol = CURRENCIES.get(currency, CURRENCIES["CNY"])["symbol"]
         self.opening_label.setText("欠款金额" if liability else "期初余额")
+        if self.valuation_count:
+            self.opening_label.setText("期初余额")
+            self.opening_input.setToolTip("余额由最新市值与后续流水决定")
+            self.hint.setText(
+                "该投资账户已使用每日市值：当前余额 = 最新市值 + 市值日之后的收支/转账。"
+                "如需修正历史，请到账户页打开「市值记录」。"
+            )
+            return
         if liability:
             self.opening_input.setPlaceholderText(
                 f"填写欠款正数，例如：12000（{currency}）"

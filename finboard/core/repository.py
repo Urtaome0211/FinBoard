@@ -18,12 +18,14 @@ from .dates import (
     parse_month,
     recent_months,
     today,
+    today_iso,
 )
 from .fees import calculate_withdrawal_fee
 from .models import (
     ACCOUNT_TYPES,
     ACCOUNT_TYPE_META,
     Account,
+    AccountValuation,
     BudgetLine,
     Category,
     CategorySpend,
@@ -104,6 +106,13 @@ class Repository:
             archived=bool(row["archived"]),
             balance=int(row["balance"]),
             currency=row["currency"] or "CNY",
+            last_valuation=(
+                int(row["last_valuation"])
+                if row["last_valuation"] is not None
+                else None
+            ),
+            last_valuation_date=row["last_valuation_date"] or "",
+            valuation_count=int(row["valuation_count"] or 0),
         )
 
     @staticmethod
@@ -138,16 +147,43 @@ class Repository:
             f"""
             SELECT a.id, a.name, a.type, a.opening_balance, a.note, a.archived,
                    a.currency,
-                   a.opening_balance + COALESCE(SUM(CASE
-                       WHEN t.kind = 'income'   AND t.account_id    = a.id THEN  t.account_amount
-                       WHEN t.kind = 'expense'  AND t.account_id    = a.id THEN -t.account_amount
-                       WHEN t.kind = 'transfer' AND t.account_id    = a.id
-                            THEN -(t.account_amount + COALESCE(t.fee, 0))
-                       WHEN t.kind = 'transfer' AND t.to_account_id = a.id THEN  t.to_amount
-                       ELSE 0 END), 0) AS balance
+                   vc.valuation_count AS valuation_count,
+                   lv.value AS last_valuation,
+                   lv.date AS last_valuation_date,
+                   CASE
+                       WHEN a.type = 'investment' AND lv.value IS NOT NULL
+                       THEN lv.value + COALESCE(SUM(CASE
+                           WHEN t.date > lv.date
+                                AND t.kind = 'income'   AND t.account_id    = a.id
+                                THEN  t.account_amount
+                           WHEN t.date > lv.date
+                                AND t.kind = 'expense'  AND t.account_id    = a.id
+                                THEN -t.account_amount
+                           WHEN t.date > lv.date
+                                AND t.kind = 'transfer' AND t.account_id    = a.id
+                                THEN -(t.account_amount + COALESCE(t.fee, 0))
+                           WHEN t.date > lv.date
+                                AND t.kind = 'transfer' AND t.to_account_id = a.id
+                                THEN  t.to_amount
+                           ELSE 0 END), 0)
+                       ELSE a.opening_balance + COALESCE(SUM(CASE
+                           WHEN t.kind = 'income'   AND t.account_id    = a.id THEN  t.account_amount
+                           WHEN t.kind = 'expense'  AND t.account_id    = a.id THEN -t.account_amount
+                           WHEN t.kind = 'transfer' AND t.account_id    = a.id
+                                THEN -(t.account_amount + COALESCE(t.fee, 0))
+                           WHEN t.kind = 'transfer' AND t.to_account_id = a.id THEN  t.to_amount
+                           ELSE 0 END), 0)
+                   END AS balance
             FROM accounts a
             LEFT JOIN transactions t
                    ON t.account_id = a.id OR t.to_account_id = a.id
+            LEFT JOIN (
+                SELECT account_id, COUNT(*) AS valuation_count, MAX(date) AS latest_date
+                FROM account_valuations
+                GROUP BY account_id
+            ) vc ON vc.account_id = a.id
+            LEFT JOIN account_valuations lv
+                   ON lv.account_id = a.id AND lv.date = vc.latest_date
             {where}
             GROUP BY a.id
             ORDER BY a.archived, a.id
@@ -216,13 +252,19 @@ class Repository:
         new_currency = current.currency if currency is None else currency
         if new_currency not in CURRENCIES:
             raise ValueError("不支持的币种")
-        if new_currency != current.currency and self.account_usage(account_id):
+        if new_currency != current.currency and (
+            self.account_usage(account_id) or current.valuation_count
+        ):
             raise ValueError("该账户已有记录，不能修改币种；请新建一个账户")
+        if new_type != "investment" and current.valuation_count:
+            raise ValueError("该账户已有市值记录，不能改为非投资账户")
         new_opening = (
             current.opening_balance if opening_balance is None else int(opening_balance)
         )
         if abs(new_opening) > MAX_AMOUNT_CENTS:
             raise ValueError("期初金额超出可记录范围")
+        if current.valuation_count and new_opening != current.opening_balance:
+            raise ValueError("该账户已有市值记录，期初余额不再参与余额计算")
         new_note = current.note if note is None else str(note or "").strip()[:200]
         new_archived = current.archived if archived is None else bool(archived)
         try:
@@ -275,6 +317,120 @@ class Repository:
                 (account_id, account_id),
             ).fetchone()[0]
         )
+
+    # -------------------------------------------------------------- valuations
+    def valuations(self, account_id: int, *, limit: int | None = None) -> list[AccountValuation]:
+        self.get_account(account_id, include_archived=True)
+        sql = (
+            "SELECT id, account_id, date, value, note, created_at"
+            " FROM account_valuations WHERE account_id = ?"
+            " ORDER BY date DESC, id DESC"
+        )
+        params: list[object] = [account_id]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(max(0, int(limit)))
+        rows = self.conn.execute(sql, tuple(params)).fetchall()
+        return [
+            AccountValuation(
+                id=int(row["id"]),
+                account_id=int(row["account_id"]),
+                date=row["date"],
+                value=int(row["value"]),
+                note=row["note"] or "",
+                created_at=row["created_at"] or "",
+            )
+            for row in rows
+        ]
+
+    def latest_valuation(self, account_id: int) -> AccountValuation | None:
+        rows = self.valuations(account_id, limit=1)
+        return rows[0] if rows else None
+
+    def valuation_at(self, account_id: int, day: str) -> AccountValuation | None:
+        day = normalize_day(day)
+        row = self.conn.execute(
+            "SELECT id, account_id, date, value, note, created_at"
+            " FROM account_valuations"
+            " WHERE account_id = ? AND date <= ?"
+            " ORDER BY date DESC, id DESC LIMIT 1",
+            (account_id, day),
+        ).fetchone()
+        if not row:
+            return None
+        return AccountValuation(
+            id=int(row["id"]),
+            account_id=int(row["account_id"]),
+            date=row["date"],
+            value=int(row["value"]),
+            note=row["note"] or "",
+            created_at=row["created_at"] or "",
+        )
+
+    def _validate_valuation(
+        self, account_id: int, day: str, value: int
+    ) -> tuple[str, int]:
+        account = self.get_account(account_id, include_archived=True)
+        if account.type != "investment":
+            raise ValueError("只有投资理财账户可以记录市值")
+        day = normalize_day(day)
+        if day > today_iso():
+            raise ValueError("市值日期不能晚于今天")
+        value = int(value)
+        if value < 0:
+            raise ValueError("市值不能为负数")
+        if abs(value) > MAX_AMOUNT_CENTS:
+            raise ValueError("市值超出可记录范围")
+        return day, value
+
+    def set_valuation(
+        self, account_id: int, day: str, value: int, note: str = ""
+    ) -> int:
+        day, value = self._validate_valuation(account_id, day, value)
+        note = str(note or "").strip()[:200]
+        try:
+            self.conn.execute(
+                "INSERT INTO account_valuations (account_id, date, value, note, created_at)"
+                " VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(account_id, date) DO UPDATE SET"
+                " value = excluded.value, note = excluded.note",
+                (account_id, day, value, note, now_iso()),
+            )
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            raise ValueError("市值记录保存失败") from None
+        row = self.conn.execute(
+            "SELECT id FROM account_valuations WHERE account_id = ? AND date = ?",
+            (account_id, day),
+        ).fetchone()
+        return int(row["id"])
+
+    def update_valuation(
+        self, valuation_id: int, day: str, value: int, note: str = ""
+    ) -> None:
+        row = self.conn.execute(
+            "SELECT * FROM account_valuations WHERE id = ?", (valuation_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError("市值记录不存在")
+        day, value = self._validate_valuation(int(row["account_id"]), day, value)
+        duplicate = self.conn.execute(
+            "SELECT id FROM account_valuations"
+            " WHERE account_id = ? AND date = ? AND id <> ?",
+            (row["account_id"], day, valuation_id),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("该日期已有市值记录，请直接编辑那一条")
+        note = str(note or "").strip()[:200]
+        self.conn.execute(
+            "UPDATE account_valuations SET date = ?, value = ?, note = ? WHERE id = ?",
+            (day, value, note, valuation_id),
+        )
+        self.conn.commit()
+
+    def delete_valuation(self, valuation_id: int) -> None:
+        self.conn.execute("DELETE FROM account_valuations WHERE id = ?", (valuation_id,))
+        self.conn.commit()
 
     # ------------------------------------------------------------- categories
     def categories(self, kind: str | None = None) -> list[Category]:

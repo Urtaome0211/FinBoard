@@ -10,8 +10,8 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from ..core.dates import short_month_label
-from ..core.models import CategorySpend, MonthStats
-from ..core.money import format_compact, format_percentage, percentage
+from ..core.models import AccountValuation, CategorySpend, MonthStats
+from ..core.money import format_cents, format_compact, format_percentage, percentage
 from .theme import colors, theme_store
 
 
@@ -305,6 +305,158 @@ class TrendChart(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
             f"支出  {format_compact(item.expense)}",
         )
+
+
+class ValuationChart(QWidget):
+    """Single-series account value history for investment accounts."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._items: list[AccountValuation] = []
+        self._symbol = "¥"
+        self._hover = -1
+        self.setMinimumHeight(220)
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        theme_store.changed.connect(self.update)
+
+    def set_data(self, items: list[AccountValuation], symbol: str = "¥") -> None:
+        self._items = sorted(items, key=lambda item: item.date)
+        self._symbol = symbol
+        self._hover = -1
+        self.update()
+
+    def _geometry(self) -> tuple[QRectF, int]:
+        return (
+            QRectF(58, 18, max(20.0, self.width() - 78), max(20.0, self.height() - 58)),
+            max(1, max((item.value for item in self._items), default=0)),
+        )
+
+    def _x_for(self, index: int, plot: QRectF) -> float:
+        if len(self._items) <= 1:
+            return plot.center().x()
+        return plot.left() + plot.width() * index / (len(self._items) - 1)
+
+    def _index_at(self, x: float, plot: QRectF) -> int:
+        if not self._items:
+            return -1
+        if len(self._items) == 1:
+            return 0
+        ratio = (x - plot.left()) / max(1.0, plot.width())
+        return max(0, min(len(self._items) - 1, round(ratio * (len(self._items) - 1))))
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        plot, _ = self._geometry()
+        self._hover = self._index_at(event.position().x(), plot)
+        self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hover = -1
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        palette = colors()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if not self._items:
+            painter.setPen(QColor(palette.faint))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "还没有市值记录")
+            return
+        plot, raw_max = self._geometry()
+        top = max(1, _nice_ceiling(int(raw_max * 1.08)))
+        axis_font = QFont(self.font())
+        axis_font.setPixelSize(11)
+        painter.setFont(axis_font)
+        for step in range(4, -1, -1):
+            y = plot.top() + plot.height() * (4 - step) / 4
+            painter.setPen(QPen(QColor(palette.chart_grid), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
+            painter.setPen(QColor(palette.faint))
+            painter.drawText(
+                QRectF(0, y - 9, plot.left() - 10, 18),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                format_compact(int(top * step / 4), self._symbol),
+            )
+
+        points: list[QPointF] = []
+        for index, item in enumerate(self._items):
+            x = self._x_for(index, plot)
+            y = plot.bottom() - plot.height() * min(item.value, top) / top
+            points.append(QPointF(x, y))
+        if len(points) > 1:
+            area = QPainterPath(QPointF(points[0].x(), plot.bottom()))
+            area.lineTo(points[0])
+            for point in points[1:]:
+                area.lineTo(point)
+            area.lineTo(points[-1].x(), plot.bottom())
+            area.closeSubpath()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(palette.primary_soft))
+            painter.drawPath(area)
+            line = QPainterPath(points[0])
+            for point in points[1:]:
+                line.lineTo(point)
+            pen = QPen(QColor(palette.primary), 2.4)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(line)
+
+        for index, point in enumerate(points):
+            selected = index == self._hover
+            painter.setPen(QPen(QColor(palette.surface), 2))
+            painter.setBrush(QColor(palette.primary))
+            radius = 5.2 if selected else 3.8
+            painter.drawEllipse(point, radius, radius)
+
+        label_count = len(self._items)
+        stride = max(1, math.ceil(label_count / 6))
+        for index, item in enumerate(self._items):
+            if index % stride and index != label_count - 1:
+                continue
+            x = self._x_for(index, plot)
+            painter.setPen(QColor(palette.faint))
+            painter.drawText(
+                QRectF(x - 30, plot.bottom() + 9, 60, 18),
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                item.date[5:],
+            )
+
+        if self._hover >= 0:
+            item = self._items[self._hover]
+            point = points[self._hover]
+            pen = QPen(QColor(palette.border_strong), 1, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawLine(QPointF(point.x(), plot.top()), QPointF(point.x(), plot.bottom()))
+            text = format_cents(item.value, self._symbol)
+            box = QRectF(
+                min(max(plot.left(), point.x() - 90), plot.right() - 190),
+                max(plot.top() + 4, point.y() - 70),
+                190,
+                58,
+            )
+            painter.setPen(QPen(QColor(palette.border), 1))
+            painter.setBrush(QColor(palette.surface))
+            painter.drawRoundedRect(box, 10, 10)
+            tip_font = QFont(self.font())
+            tip_font.setPixelSize(11)
+            painter.setFont(tip_font)
+            painter.setPen(QColor(palette.muted))
+            painter.drawText(
+                box.adjusted(12, 7, -12, 0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                item.date,
+            )
+            tip_font.setPixelSize(13)
+            tip_font.setWeight(QFont.Weight.DemiBold)
+            painter.setFont(tip_font)
+            painter.setPen(QColor(palette.text))
+            painter.drawText(
+                box.adjusted(12, 27, -12, 0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                text,
+            )
 
 
 class CategoryBars(QWidget):

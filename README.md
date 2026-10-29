@@ -22,6 +22,7 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 - **总览**：净资产、本月收入/支出/结余、资产与负债百分比环图、近 6 个月趋势、最近记录、预算进度。
 - **收支明细**：按月份、类型、账户、分类筛选，支持关键词搜索；双击编辑、右键删除、Delete 删除；CSV 导出。
 - **账户**：现金、储蓄卡、投资理财、信用卡、贷款五类账户；每个账户可设自己的币种；实时余额由期初余额和流水聚合得出；信用卡/贷款按欠款金额（正数）录入，自动计入负债；支持归档与恢复。
+- **投资市值**：投资理财账户可按日记录收盘总市值，账户余额自动变为「最新市值 + 市值日之后的流水」；带历史曲线、同日覆盖、删除重算，市值变动不计入收支。
 - **多币种**：账户级 + 交易级币种；按每个交易日的汇率折算后汇总，周末和节假日沿用最近一个工作日；基准币种可切换，总览/报表/预算统一按基准币种显示。
 - **钱包提现手续费**：从「支付宝钱包」或「微信钱包」转出时，按 0.1% 自动扣手续费（支付宝最低 ¥0.10，微信最低 ¥0.01）；手续费计入支出统计，报表中归入「提现手续费」。
 - **汇率**：每日自动检查一次，也可在设置页手动刷新；数据来自 Frankfurter（欧洲央行参考汇率），缓存在本地，离线时继续使用最后一次汇率。
@@ -49,6 +50,10 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 | 多币种明细 | 汇率与设置 |
 | --- | --- |
 | ![多币种明细](docs/screenshots/multicurrency.png) | ![设置](docs/screenshots/settings.png) |
+
+| 投资账户 | 市值记录 |
+| --- | --- |
+| ![投资账户](docs/screenshots/accounts-investment.png) | ![市值记录](docs/screenshots/valuation.png) |
 
 更多截图在 [`docs/screenshots/`](docs/screenshots/)。
 
@@ -117,12 +122,13 @@ dist\FinBoard\FinBoard.exe --version
 
 1. **先更新汇率**：在「设置 → 汇率」点一次「更新汇率」。程序每天首次启动时会自动检查一次；外币账户、外币交易和基准币种切换都需要至少一次成功更新。
 2. **建账户**：在「账户」页新建现金、银行卡、信用卡或贷款账户，选择账户币种，填入期初余额。信用卡、贷款请填写**欠款金额（正数）**，程序会自动转为负余额并计入负债；编辑旧账户保存时也会自动转换。账户一旦有流水，币种不可再改。
-3. **记一笔**：点右上角「记一笔」或按 `Ctrl+N`，选择支出/收入/转账，填写金额、币种、账户和分类。交易币种可以和账户币种不同，程序按交易日期汇率折算入账，并在下方显示折算预览。转账会让转出账户减少、转入账户增加；跨币种转账可自动或手动填写「到账金额」。
+3. **记录投资市值**：投资理财账户行的折线图标打开「市值记录」。填入某个交易日的**收盘总市值**（账户币种），保存后余额 = 最新市值 + 该日期之后的收入/支出/转账净额；同日再次保存会覆盖。历史曲线和记录列表里可以删除旧快照，余额会立即重算。市值变化只影响账户余额和净资产，不计入当月收入或支出。
+4. **记一笔**：点右上角「记一笔」或按 `Ctrl+N`，选择支出/收入/转账，填写金额、币种、账户和分类。交易币种可以和账户币种不同，程序按交易日期汇率折算入账，并在下方显示折算预览。转账会让转出账户减少、转入账户增加；跨币种转账可自动或手动填写「到账金额」。
    - 如果转出账户是「支付宝钱包」或「微信钱包」（也识别「支付宝」「微信」），程序会自动按提现金额的 0.1% 扣手续费：支付宝每笔最低 ¥0.10，微信每笔最低 ¥0.01。手续费从转出账户额外扣除，转入账户仍收到填写的金额；它会计入当月支出，但不会生成一条独立流水。
    - 规则按**账户名称**识别，仅对人民币钱包生效；改名后不再自动计费。
-4. **设预算**：在「预算」页选择月份，先设置本月总预算，再给重点分类单独设上限。预算金额使用当前基准币种。
-5. **看报表**：在「报表」页切换月份，查看资产/负债比例、支出结构和趋势；所有汇总按交易日汇率折算为基准币种。
-6. **备份数据**：在「设置 → 数据」中备份数据库或导出 CSV。CSV 也可用于从其他软件迁移数据。
+5. **设预算**：在「预算」页选择月份，先设置本月总预算，再给重点分类单独设上限。预算金额使用当前基准币种。
+6. **看报表**：在「报表」页切换月份，查看资产/负债比例、支出结构和趋势；所有汇总按交易日汇率折算为基准币种。
+7. **备份数据**：在「设置 → 数据」中备份数据库或导出 CSV。CSV 也可用于从其他软件迁移数据。
 
 快捷键：
 
@@ -196,14 +202,15 @@ finboard/
 │   ├── models.py           # 交易表模型与类型徽章代理
 │   ├── rows.py             # 交易/账户列表行
 │   ├── main_window.py      # 侧栏、顶栏、页面路由
-│   ├── dialogs/            # 记账、账户、分类、预算、分类管理
+│   ├── dialogs/            # 记账、账户、市值、分类、预算、分类管理
 │   └── pages/              # 总览、明细、账户、预算、报表、设置
 ├── resources/              # 图标、勾选/下拉 SVG
 └── __main__.py
 tests/test_core.py          # 金额/日期/仓储/CSV/服务层测试
 tests/test_rates.py         # 汇率、跨币种转账与币种 CSV 测试
 tests/test_fees.py          # 钱包提现手续费与统计测试
-tests/test_ui.py            # 账户/交易对话框、自动更新汇率测试
+tests/test_valuations.py    # 投资市值、快照后流水与余额锁定测试
+tests/test_ui.py            # 账户/交易/市值对话框、自动更新汇率测试
 scripts/                    # 冒烟、截图、图标生成
 docs/                       # 截图与 logo
 run.py                      # 源码入口
@@ -217,6 +224,7 @@ FinBoard.spec               # PyInstaller 构建配置
 - **余额不落库**：账户余额 = 期初余额 + 收入 − 支出 ± 转账，由 SQL 聚合实时计算；避免多写一份余额导致不一致。
 - **转账双账户**：转账只存一条 `transactions` 记录，查询时同时计入转出和转入账户；报表统计收支时排除转账。
 - **提现手续费**：转账记录多存一个 `fee`；钱包转出时由 `fees.py` 按账户名和折算后人民币金额计算，余额、月度统计和分类报表都会计入，CSV 导入时重新计算。
+- **投资市值快照**：`account_valuations` 每个账户每日最多一条；最新快照接管余额，只叠加 `date > 快照日期` 的流水。市值变化不写入 `transactions`，因此不会伪装成收入或支出；删除快照后余额自动回到上一份快照或期初余额。
 - **自绘图表**：环图、折线图、分类条全部在 `paintEvent` 中绘制，颜色取当前 Palette，主题切换即时重绘。
 - **主题系统**：一个 `Palette` dataclass 驱动 QPalette、QSS 与图表；设置保存在 `QSettings`。
 - **本地优先**：没有账号、云同步、遥测；只有每日一次公开汇率请求，失败不影响离线使用。
@@ -224,7 +232,7 @@ FinBoard.spec               # PyInstaller 构建配置
 ### 测试与构建
 
 ```bash
-# 单元测试（37 个）
+# 单元测试（48 个）
 python -m unittest discover -s tests
 
 # 核心冒烟（临时数据库、演示数据、CSV 往返）
@@ -244,6 +252,7 @@ python -m PyInstaller FinBoard.spec --noconfirm --clean
 ### 已知限制
 
 - 汇率来自 Frankfurter（ECB 参考汇率），不含周末/节假日单独报价；周末交易沿用最近一个工作日。若交易日期早于本地最早汇率，会退回到最早一条，建议外币记账前先更新汇率。
+- 市值记录只对投资理财账户开放。快照按“当日收盘后的总市值”理解：快照日及之前的流水视为已包含在市值里，只有快照日之后的收支/转账才会叠加到余额。
 - 基准币种切换只改变汇总显示，不会改写已有预算金额，切换后请复核预算。
 - 提现手续费只对账户名为「支付宝钱包 / 微信钱包」（或「支付宝 / 微信」）的人民币账户自动计算；改名或使用其他名称不会计费。手续费规则是内置的，不随支付宝/微信官方调整自动更新。
 - 单用户、单机；没有登录、加密或云同步。
@@ -270,6 +279,7 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 - **Dashboard**: net worth, monthly income/expense/balance, asset-vs-liability donut, 6-month trend, recent transactions and budget progress.
 - **Transactions**: filter by month, kind, account and category; search by payee/note; edit, delete, export to CSV.
 - **Accounts**: cash, debit card, investment, credit card and loan accounts, each with its own currency. Balances are aggregated from the opening balance and transactions in real time. Archive and restore are supported.
+- **Investment valuations**: record a closing market value per day for investment accounts. The balance becomes “latest snapshot + later transactions”, with a history chart, same-day overwrite and delete-to-recalculate. Market moves are not counted as income or expense.
 - **Multi-currency**: account-level and transaction-level currencies. Amounts are converted at the transaction-date rate, with weekend/holiday fallback to the latest business day. The base currency can be switched; dashboard, reports and budgets are shown in it.
 - **Wallet withdrawal fees**: transfers out of “支付宝钱包” or “微信钱包” automatically add a 0.1% fee (minimum ¥0.10 for Alipay, ¥0.01 for WeChat). The fee is counted as an expense and grouped under “提现手续费” in reports.
 - **Rates**: one automatic check per day plus a manual refresh in Settings. Data comes from Frankfurter (ECB reference rates) and is cached locally, so offline use keeps the last known rates.
@@ -297,6 +307,10 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 | Multi-currency transactions | Rates & settings |
 | --- | --- |
 | ![Multi-currency](docs/screenshots/multicurrency.png) | ![Settings](docs/screenshots/settings.png) |
+
+| Investment accounts | Valuation history |
+| --- | --- |
+| ![Investment accounts](docs/screenshots/accounts-investment.png) | ![Valuation history](docs/screenshots/valuation.png) |
 
 ![Wallet withdrawal fees](docs/screenshots/wallet-fees.png)
 
@@ -429,7 +443,7 @@ Default location on Windows:
 ### Testing & build
 
 ```bash
-# 37 unit tests
+# 48 unit tests
 python -m unittest discover -s tests
 
 # Core smoke test (temporary DB, demo data, CSV round-trip)
@@ -449,6 +463,7 @@ Output: `dist/FinBoard/FinBoard.exe` (one-dir; ship the whole folder).
 ### Known limitations
 
 - Rates come from Frankfurter (ECB reference rates) and have no separate weekend/holiday quotes; weekend transactions use the latest business day. A transaction dated before the earliest cached rate falls back to that earliest rate, so update rates before backfilling foreign transactions.
+- Valuations are available for investment accounts only. A snapshot is treated as the post-close value: transactions dated on or before that day are considered already reflected in it, while later flows adjust the balance.
 - Switching the base currency changes aggregation display only; existing budget amounts are not rewritten, so review them after switching.
 - Withdrawal fees are calculated only for CNY accounts named “支付宝钱包 / 微信钱包” (or “支付宝 / 微信”). Renaming an account or using a different name disables the rule. The rates are built in and do not update when Alipay/WeChat change their policy.
 - Single-user, single-machine: no login, encryption or cloud sync.

@@ -13,11 +13,13 @@ from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from finboard.core.database import Database  # noqa: E402
+from finboard.core.dates import today  # noqa: E402
 from finboard.core.rates import RateSnapshot, RateStore  # noqa: E402
 from finboard.core.repository import Repository  # noqa: E402
 from finboard.core.service import FinanceService  # noqa: E402
 from finboard.ui.dialogs.account_dialog import AccountDialog  # noqa: E402
 from finboard.ui.dialogs.transaction_dialog import TransactionDialog  # noqa: E402
+from finboard.ui.dialogs.valuation_dialog import ValuationDialog  # noqa: E402
 from finboard.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -162,6 +164,50 @@ class TransactionDialogTests(unittest.TestCase):
             self.assertEqual(transaction.fee, 10)
             self.assertEqual(self.repo.account_balance(alipay), 489_990)
             self.assertEqual(self.repo.account_balance(bank), 10_000)
+        finally:
+            dialog.deleteLater()
+
+
+class ValuationDialogTests(unittest.TestCase):
+    app: QApplication
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.tmp.name) / "test.db")
+        self.repo = Repository(self.db)
+        self.service = FinanceService(self.repo)
+
+    def tearDown(self) -> None:
+        self.db.close()
+        self.tmp.cleanup()
+
+    def test_dialog_saves_snapshot_without_closing(self) -> None:
+        account_id = self.repo.add_account("证券账户", "investment", 100_000)
+        dialog = ValuationDialog(self.service, self.repo.get_account(account_id))
+        try:
+            dialog.amount_input.setText("1,234.56")
+            dialog.note_input.setText("收盘")
+            dialog._save()
+            account = self.repo.get_account(account_id)
+            self.assertEqual(account.last_valuation, 123_456)
+            self.assertEqual(account.balance, 123_456)
+            self.assertEqual(dialog.latest_value.text(), "¥1,234.56")
+        finally:
+            dialog.deleteLater()
+
+    def test_account_dialog_locks_valuation_fields(self) -> None:
+        account_id = self.repo.add_account("证券账户", "investment", 100_000)
+        self.repo.set_valuation(account_id, today(), 200_000)
+        dialog = AccountDialog(self.service, self.repo.get_account(account_id))
+        try:
+            self.assertFalse(dialog.opening_input.isEnabled())
+            self.assertFalse(dialog.type_combo.isEnabled())
+            self.assertFalse(dialog.currency_combo.isEnabled())
+            self.assertIn("最新市值", dialog.hint.text())
         finally:
             dialog.deleteLater()
 

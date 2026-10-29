@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from . import csv_io
-from .models import ImportResult, TransactionFilter
+from .models import AccountValuation, ImportResult, TransactionFilter
 from .money import CURRENCIES, format_cents, format_compact, format_percentage
 from .rates import RateSnapshot, RateStore
 from .repository import Repository
@@ -133,6 +133,28 @@ class FinanceService(QObject):
 
     def set_account_archived(self, account_id: int, archived: bool) -> None:
         self.repo.set_account_archived(account_id, archived)
+        self.changed.emit()
+
+    def valuations(
+        self, account_id: int, *, limit: int | None = None
+    ) -> list[AccountValuation]:
+        return self.repo.valuations(account_id, limit=limit)
+
+    def set_valuation(
+        self, account_id: int, day: str, value: int, note: str = ""
+    ) -> int:
+        valuation_id = self.repo.set_valuation(account_id, day, value, note)
+        self.changed.emit()
+        return valuation_id
+
+    def update_valuation(
+        self, valuation_id: int, day: str, value: int, note: str = ""
+    ) -> None:
+        self.repo.update_valuation(valuation_id, day, value, note)
+        self.changed.emit()
+
+    def delete_valuation(self, valuation_id: int) -> None:
+        self.repo.delete_valuation(valuation_id)
         self.changed.emit()
 
     # -------------------------------------------------------------- categories

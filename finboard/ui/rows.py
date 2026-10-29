@@ -158,6 +158,7 @@ class AccountRow(QFrame):
     edit_requested = Signal(object)
     archive_requested = Signal(object)
     delete_requested = Signal(object)
+    valuation_requested = Signal(object)
 
     def __init__(
         self, account: Account, service: FinanceService, parent: QWidget | None = None
@@ -192,6 +193,12 @@ class AccountRow(QFrame):
         name_row.addStretch(1)
         column.addLayout(name_row)
         note = account.note or ("负债账户" if is_liability else "资产账户")
+        if account.type == "investment":
+            note = account.note or "投资账户"
+            if account.last_valuation_date:
+                note = f"{note} · 市值 {account.last_valuation_date}"
+            else:
+                note = f"{note} · 尚未记录市值"
         if account.currency != "CNY":
             note = f"{account.currency} · {note}"
         column.addWidget(ElidedLabel(note, role="muted", size=11, weight=400))
@@ -212,6 +219,9 @@ class AccountRow(QFrame):
 
         actions = QHBoxLayout()
         actions.setSpacing(0)
+        valuation = IconButton("chart", "记录每日市值", size=16)
+        valuation.setFixedSize(30, 30)
+        valuation.setVisible(account.type == "investment" and not account.archived)
         edit = IconButton("edit", "编辑账户", size=16)
         archive = IconButton(
             "refresh" if account.archived else "archive",
@@ -219,9 +229,10 @@ class AccountRow(QFrame):
             size=16,
         )
         delete = IconButton("trash", "删除账户", size=16)
-        for button in (edit, archive, delete):
+        for button in (valuation, edit, archive, delete):
             button.setFixedSize(30, 30)
             actions.addWidget(button)
+        valuation.clicked.connect(lambda: self.valuation_requested.emit(account))
         edit.clicked.connect(lambda: self.edit_requested.emit(account))
         archive.clicked.connect(lambda: self.archive_requested.emit(account))
         delete.clicked.connect(lambda: self.delete_requested.emit(account))

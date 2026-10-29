@@ -5,6 +5,7 @@ from .budget_dialog import BudgetDialog
 from .category_dialog import CategoryDialog
 from .category_manager import CategoryManagerDialog
 from .transaction_dialog import TransactionDialog
+from .valuation_dialog import ValuationDialog
 
 __all__ = [
     "AccountDialog",
@@ -12,4 +13,5 @@ __all__ = [
     "CategoryDialog",
     "CategoryManagerDialog",
     "TransactionDialog",
+    "ValuationDialog",
 ]
