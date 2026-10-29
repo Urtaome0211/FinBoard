@@ -1,0 +1,36 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Packaging output
+build/
+dist/
+*.manifest
+
+# Runtime data
+*.db
+*.db-wal
+*.db-shm
+*.log
+exports/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local screenshots (curated copies live in docs/screenshots/)
+build/pages/
+build/pages-dark/
+build/dialogs/
+
+# Blog article stays local; screenshots used by README are tracked
+docs/blog.md
