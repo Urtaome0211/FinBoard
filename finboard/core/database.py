@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -167,6 +167,43 @@ CREATE INDEX IF NOT EXISTS idx_reconciliations_account
     ON account_reconciliations(account_id, date);
 """
 
+SCHEMA_V7 = """
+ALTER TABLE budgets ADD COLUMN rollover INTEGER NOT NULL DEFAULT 0
+    CHECK (rollover IN (0,1));
+
+ALTER TABLE transactions ADD COLUMN recurring_id INTEGER
+    REFERENCES recurring_transactions(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS holdings (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id    INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    symbol        TEXT    NOT NULL DEFAULT '',
+    name          TEXT    NOT NULL,
+    quantity_units INTEGER NOT NULL CHECK (quantity_units > 0),
+    cost_price    INTEGER NOT NULL CHECK (cost_price >= 0),
+    price         INTEGER NOT NULL CHECK (price >= 0),
+    note          TEXT    NOT NULL DEFAULT '',
+    created_at    TEXT    NOT NULL,
+    updated_at    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_holdings_account ON holdings(account_id);
+
+CREATE TABLE IF NOT EXISTS savings_goals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT    NOT NULL,
+    target_amount INTEGER NOT NULL CHECK (target_amount > 0),
+    saved_amount  INTEGER NOT NULL DEFAULT 0 CHECK (saved_amount >= 0),
+    target_date   TEXT,
+    note          TEXT    NOT NULL DEFAULT '',
+    archived      INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
+    created_at    TEXT    NOT NULL,
+    updated_at    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_savings_goals_date ON savings_goals(target_date);
+"""
+
 
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
@@ -222,6 +259,9 @@ class Database:
         if version < 6:
             conn.executescript(SCHEMA_V6)
             version = 6
+        if version < 7:
+            conn.executescript(SCHEMA_V7)
+            version = 7
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

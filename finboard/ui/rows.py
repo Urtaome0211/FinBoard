@@ -170,6 +170,7 @@ class AccountRow(QFrame):
     archive_requested = Signal(object)
     delete_requested = Signal(object)
     valuation_requested = Signal(object)
+    holdings_requested = Signal(object)
     reconcile_requested = Signal(object)
 
     def __init__(
@@ -236,6 +237,9 @@ class AccountRow(QFrame):
 
         actions = QHBoxLayout()
         actions.setSpacing(0)
+        holdings = IconButton("investment", t("持仓与成本"), size=16)
+        holdings.setFixedSize(30, 30)
+        holdings.setVisible(account.type == "investment" and not account.archived)
         valuation = IconButton("chart", t("记录每日市值"), size=16)
         valuation.setFixedSize(30, 30)
         valuation.setVisible(account.type == "investment" and not account.archived)
@@ -249,9 +253,10 @@ class AccountRow(QFrame):
             size=16,
         )
         delete = IconButton("trash", t("删除账户"), size=16)
-        for button in (valuation, reconcile, edit, archive, delete):
+        for button in (holdings, valuation, reconcile, edit, archive, delete):
             button.setFixedSize(30, 30)
             actions.addWidget(button)
+        holdings.clicked.connect(lambda: self.holdings_requested.emit(account))
         valuation.clicked.connect(lambda: self.valuation_requested.emit(account))
         reconcile.clicked.connect(lambda: self.reconcile_requested.emit(account))
         edit.clicked.connect(lambda: self.edit_requested.emit(account))

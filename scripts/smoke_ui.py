@@ -29,6 +29,9 @@ def main() -> None:
     db = Database(tmp / "demo.db")
     repo = Repository(db)
     seed_demo(repo)
+    fund = next(a for a in repo.accounts() if a.type == "investment")
+    repo.add_holding(fund.id, "沪深300ETF", symbol="510300", quantity_units=100_000_000, cost_price=40_000, price=45_000)
+    repo.add_savings_goal("应急金", target_amount=5_000_000, saved_amount=1_500_000, target_date="2027-06-30")
     service = FinanceService(repo)
     settings = QSettings("FinBoardTest", "FinBoardTest")
     window = MainWindow(service, settings)
@@ -39,7 +42,7 @@ def main() -> None:
     suffix = "" if args.theme == "light" else "-dark"
     out_dir = Path("build") / f"pages{suffix}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    for key in ("dashboard", "transactions", "accounts", "budgets", "recurring", "reports", "settings"):
+    for key in ("dashboard", "transactions", "accounts", "budgets", "savings", "forecast", "recurring", "reports", "settings"):
         window.navigate(key)
         app.processEvents()
         app.processEvents()

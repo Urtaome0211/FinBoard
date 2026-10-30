@@ -65,6 +65,10 @@ class BudgetRow(QFrame):
         name.setProperty("i18nSkip", True)
         name.setStyleSheet("font-weight: 600;")
         top.addWidget(name)
+        if line.rollover:
+            rollover_badge = Badge(f"+{service.format(line.rollover)}", "primary")
+            rollover_badge.setToolTip(t("上月结转的可用预算"))
+            top.addWidget(rollover_badge)
         top.addStretch(1)
         percent = Badge(f"{line.ratio * 100:.0f}%", tone)
         top.addWidget(percent)
@@ -83,7 +87,7 @@ class BudgetRow(QFrame):
         bar.setFixedHeight(6)
         set_progress(bar, line.ratio * 100, force_tone=tone if line.ratio > 0.8 else None)
         bottom.addWidget(bar, 1)
-        used = QLabel(f"{service.format(line.spent)} / {service.format(line.amount)}")
+        used = QLabel(f"{service.format(line.spent)} / {service.format(line.available)}")
         used.setProperty("role", "muted")
         used.setStyleSheet("font-size: 11px;")
         used.setFixedWidth(142)
@@ -219,6 +223,12 @@ class BudgetsPage(Page):
         used = QLabel(t("已用 {amount}", amount=self.service.format(total.spent)))
         used.setProperty("role", "muted")
         hint_column.addWidget(used)
+        if total.rollover:
+            carry = QLabel(
+                t("含上月结转 {amount}", amount=self.service.format(total.rollover))
+            )
+            carry.setProperty("role", "success")
+            hint_column.addWidget(carry)
         remaining = total.remaining
         if remaining < 0:
             detail = t("超出预算 {amount}", amount=self.service.format(-remaining))
@@ -263,7 +273,7 @@ class BudgetsPage(Page):
             return
         self.used_card.set_value(
             self.service.format(total.spent),
-            hint=t("预算 {amount}", amount=self.service.format(total.amount)),
+            hint=t("预算 {amount}", amount=self.service.format(total.available)),
             tone="expense",
         )
         if total.remaining < 0:

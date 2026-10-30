@@ -7,11 +7,16 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from . import csv_io
+from .dates import today_iso
 from .models import (
     AccountValuation,
+    ForecastPoint,
+    Holding,
+    HoldingsSummary,
     ImportResult,
     Reconciliation,
     RecurringTransaction,
+    SavingsGoal,
     TransactionBalance,
     TransactionFilter,
 )
@@ -245,13 +250,78 @@ class FinanceService(QObject):
         return fallback
 
     # ----------------------------------------------------------------- budgets
-    def set_budget(self, month: str, category_id: int, amount: int) -> None:
-        self.repo.upsert_budget(month, category_id, amount)
+    def set_budget(
+        self, month: str, category_id: int, amount: int, rollover: bool = False
+    ) -> None:
+        self.repo.upsert_budget(month, category_id, amount, rollover)
         self.changed.emit()
 
     def delete_budget(self, budget_id: int) -> None:
         self.repo.delete_budget(budget_id)
         self.changed.emit()
+
+    # --------------------------------------------------------------- holdings
+    def holdings(self, account_id: int | None = None) -> list[Holding]:
+        return self.repo.holdings(account_id)
+
+    def holdings_summary(self, account_id: int | None = None) -> HoldingsSummary:
+        return self.repo.holdings_summary(account_id)
+
+    def add_holding(self, account_id: int, name: str, **fields) -> int:
+        holding_id = self.repo.add_holding(account_id, name, **fields)
+        self.changed.emit()
+        return holding_id
+
+    def update_holding(self, holding_id: int, **fields) -> None:
+        self.repo.update_holding(holding_id, **fields)
+        self.changed.emit()
+
+    def delete_holding(self, holding_id: int) -> None:
+        self.repo.delete_holding(holding_id)
+        self.changed.emit()
+
+    def sync_holdings_value(self, account_id: int, day: str | None = None) -> int:
+        summary = self.repo.holdings_summary(account_id)
+        if not summary.count:
+            raise ValueError("请先添加持仓")
+        self.repo.set_valuation(
+            account_id,
+            day or today_iso(),
+            summary.market,
+            "按持仓市值更新",
+        )
+        self.changed.emit()
+        return summary.market
+
+    # ---------------------------------------------------------------- savings
+    def savings_goals(self, *, include_archived: bool = False) -> list[SavingsGoal]:
+        return self.repo.savings_goals(include_archived=include_archived)
+
+    def add_savings_goal(self, name: str, target_amount: int, **fields) -> int:
+        goal_id = self.repo.add_savings_goal(name, target_amount, **fields)
+        self.changed.emit()
+        return goal_id
+
+    def update_savings_goal(self, goal_id: int, **fields) -> None:
+        self.repo.update_savings_goal(goal_id, **fields)
+        self.changed.emit()
+
+    def add_goal_funds(self, goal_id: int, delta: int) -> None:
+        self.repo.add_goal_funds(goal_id, delta)
+        self.changed.emit()
+
+    def delete_savings_goal(self, goal_id: int) -> None:
+        self.repo.delete_savings_goal(goal_id)
+        self.changed.emit()
+
+    # --------------------------------------------------------------- forecast
+    def cash_flow_forecast(
+        self, months: int = 6, start_month: str | None = None
+    ) -> list[ForecastPoint]:
+        return self.repo.cash_flow_forecast(months, start_month)
+
+    def liquid_balance(self) -> int:
+        return self.repo.liquid_balance()
 
     # -------------------------------------------------------------- data tools
     def import_csv(self, path: str | Path) -> ImportResult:

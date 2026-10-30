@@ -101,6 +101,91 @@ class AccountValuation:
 
 
 @dataclass(frozen=True)
+class Holding:
+    id: int
+    account_id: int
+    name: str
+    symbol: str = ""
+    quantity_units: int = 0
+    cost_price: int = 0
+    price: int = 0
+    note: str = ""
+    created_at: str = ""
+    currency: str = "CNY"
+    account_name: str = ""
+
+    @property
+    def cost_value(self) -> int:
+        return (self.quantity_units * self.cost_price + 500_000) // 1_000_000
+
+    @property
+    def market_value(self) -> int:
+        return (self.quantity_units * self.price + 500_000) // 1_000_000
+
+    @property
+    def profit(self) -> int:
+        return self.market_value - self.cost_value
+
+    @property
+    def return_rate(self) -> float:
+        if self.cost_value <= 0:
+            return 0.0
+        return round(self.profit / self.cost_value * 100, 2)
+
+
+@dataclass(frozen=True)
+class HoldingsSummary:
+    cost: int = 0
+    market: int = 0
+    count: int = 0
+
+    @property
+    def profit(self) -> int:
+        return self.market - self.cost
+
+    @property
+    def return_rate(self) -> float:
+        if self.cost <= 0:
+            return 0.0
+        return round(self.profit / self.cost * 100, 2)
+
+
+@dataclass(frozen=True)
+class SavingsGoal:
+    id: int
+    name: str
+    target_amount: int
+    saved_amount: int = 0
+    target_date: str | None = None
+    note: str = ""
+    archived: bool = False
+    created_at: str = ""
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.target_amount - self.saved_amount)
+
+    @property
+    def progress(self) -> float:
+        if self.target_amount <= 0:
+            return 0.0
+        return round(min(100.0, self.saved_amount / self.target_amount * 100), 1)
+
+    @property
+    def completed(self) -> bool:
+        return self.saved_amount >= self.target_amount
+
+
+@dataclass(frozen=True)
+class ForecastPoint:
+    month: str
+    income: int
+    expense: int
+    net: int
+    ending_cash: int
+
+
+@dataclass(frozen=True)
 class RecurringTransaction:
     id: int
     name: str
@@ -175,6 +260,7 @@ class Transaction:
     fee: int = 0
     fee_waived: bool = False
     fee_included: bool = False
+    recurring_id: int | None = None
     account_currency: str = "CNY"
     to_account_currency: str = "CNY"
 
@@ -258,18 +344,24 @@ class BudgetLine:
     color: str
     amount: int
     spent: int
+    rollover: int = 0
+    rollover_enabled: bool = False
 
     @property
     def is_overall(self) -> bool:
         return self.category_id == 0
 
     @property
+    def available(self) -> int:
+        return self.amount + self.rollover
+
+    @property
     def remaining(self) -> int:
-        return self.amount - self.spent
+        return self.available - self.spent
 
     @property
     def ratio(self) -> float:
-        return self.spent / self.amount if self.amount else 0.0
+        return self.spent / self.available if self.available else 0.0
 
 
 @dataclass(frozen=True)

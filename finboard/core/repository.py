@@ -21,6 +21,7 @@ from .dates import (
     now_iso,
     parse_month,
     recent_months,
+    shift_month,
     today,
     today_iso,
 )
@@ -34,22 +35,26 @@ from .models import (
     Category,
     CategorySpend,
     FALLBACK_CATEGORY,
+    ForecastPoint,
+    Holding,
+    HoldingsSummary,
     KIND_LABELS,
     MonthStats,
     NetWorth,
     PayeeSpend,
     Reconciliation,
     RecurringTransaction,
+    SavingsGoal,
     Transaction,
     TransactionBalance,
     TransactionFilter,
 )
-from .money import CURRENCIES, MAX_AMOUNT_CENTS
+from .money import CURRENCIES, MAX_AMOUNT_CENTS, MAX_QUANTITY_UNITS
 from .rates import RateError, RateStore
 
 _TXN_SELECT = """
 SELECT t.id, t.date, t.kind, t.amount, t.currency, t.account_amount, t.to_amount, t.fee,
-       t.fee_waived, t.fee_included,
+       t.fee_waived, t.fee_included, t.recurring_id,
        t.category_id, c.name AS category_name, c.color AS category_color,
        t.account_id, a.name AS account_name, a.currency AS account_currency,
        t.to_account_id, ta.name AS to_account_name,
@@ -183,6 +188,9 @@ class Repository:
             fee=int(row["fee"] or 0),
             fee_waived=bool(row["fee_waived"]),
             fee_included=bool(row["fee_included"]),
+            recurring_id=(
+                int(row["recurring_id"]) if row["recurring_id"] is not None else None
+            ),
             account_currency=row["account_currency"] or "CNY",
             to_account_currency=row["to_account_currency"] or "CNY",
         )
@@ -539,6 +547,7 @@ class Repository:
             payee=rule.payee,
             note=rule.note or rule.name,
             fee_waived=rule.fee_waived,
+            recurring_id=recurring_id,
         )
         following = next_recurring_date(
             rule.next_date, rule.frequency, rule.interval_count
@@ -734,11 +743,15 @@ class Repository:
         if new_currency not in CURRENCIES:
             raise ValueError("不支持的币种")
         if new_currency != current.currency and (
-            self.account_usage(account_id) or current.valuation_count
+            self.account_usage(account_id)
+            or current.valuation_count
+            or self.holding_usage(account_id)
         ):
             raise ValueError("该账户已有记录，不能修改币种；请新建一个账户")
-        if new_type != "investment" and current.valuation_count:
-            raise ValueError("该账户已有市值记录，不能改为非投资账户")
+        if new_type != "investment" and (
+            current.valuation_count or self.holding_usage(account_id)
+        ):
+            raise ValueError("该账户已有投资记录，不能改为非投资账户")
         new_opening = (
             current.opening_balance if opening_balance is None else int(opening_balance)
         )
@@ -785,6 +798,8 @@ class Repository:
         ).fetchone()[0]
         if used:
             raise ValueError("该账户已有记录，无法删除；可以改为归档")
+        if self.holding_usage(account_id):
+            raise ValueError("该账户已有持仓记录，无法删除；可以改为归档")
         remaining = self.conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
         if remaining <= 1:
             raise ValueError("至少需要保留一个账户")
@@ -911,6 +926,251 @@ class Repository:
 
     def delete_valuation(self, valuation_id: int) -> None:
         self.conn.execute("DELETE FROM account_valuations WHERE id = ?", (valuation_id,))
+        self.conn.commit()
+
+    # --------------------------------------------------------------- holdings
+    @staticmethod
+    def _holding(row: sqlite3.Row) -> Holding:
+        return Holding(
+            id=int(row["id"]),
+            account_id=int(row["account_id"]),
+            name=row["name"],
+            symbol=row["symbol"] or "",
+            quantity_units=int(row["quantity_units"]),
+            cost_price=int(row["cost_price"]),
+            price=int(row["price"]),
+            note=row["note"] or "",
+            created_at=row["created_at"] or "",
+            currency=row["currency"] or "CNY",
+            account_name=row["account_name"] or "",
+        )
+
+    def _validate_holding(
+        self,
+        account_id: int,
+        name: str,
+        quantity_units: int,
+        cost_price: int,
+        price: int,
+    ) -> tuple[str, int, int, int]:
+        account = self.get_account(account_id, include_archived=True)
+        if account.type != "investment":
+            raise ValueError("只有投资理财账户可以记录持仓")
+        name = self._clean_name(name, "持仓名称", 60)
+        quantity_units = int(quantity_units)
+        if quantity_units <= 0 or quantity_units > MAX_QUANTITY_UNITS:
+            raise ValueError("持仓数量无效")
+        for value, label in ((cost_price, "成本价"), (price, "现价")):
+            if int(value) < 0 or abs(int(value)) > MAX_AMOUNT_CENTS:
+                raise ValueError(f"{label}无效")
+        return name, quantity_units, int(cost_price), int(price)
+
+    def holdings(self, account_id: int | None = None) -> list[Holding]:
+        sql = (
+            "SELECT h.id, h.account_id, h.symbol, h.name, h.quantity_units,"
+            " h.cost_price, h.price, h.note, h.created_at,"
+            " a.currency AS currency, a.name AS account_name"
+            " FROM holdings h JOIN accounts a ON a.id = h.account_id"
+        )
+        params: list[object] = []
+        if account_id is not None:
+            sql += " WHERE h.account_id = ?"
+            params.append(int(account_id))
+        sql += " ORDER BY h.account_id, h.symbol, h.name, h.id"
+        return [self._holding(row) for row in self.conn.execute(sql, tuple(params))]
+
+    def get_holding(self, holding_id: int) -> Holding:
+        row = self.conn.execute(
+            "SELECT h.id, h.account_id, h.symbol, h.name, h.quantity_units,"
+            " h.cost_price, h.price, h.note, h.created_at,"
+            " a.currency AS currency, a.name AS account_name"
+            " FROM holdings h JOIN accounts a ON a.id = h.account_id WHERE h.id = ?",
+            (holding_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("持仓不存在")
+        return self._holding(row)
+
+    def add_holding(
+        self,
+        account_id: int,
+        name: str,
+        *,
+        symbol: str = "",
+        quantity_units: int,
+        cost_price: int,
+        price: int,
+        note: str = "",
+    ) -> int:
+        name, quantity_units, cost_price, price = self._validate_holding(
+            account_id, name, quantity_units, cost_price, price
+        )
+        cursor = self.conn.execute(
+            "INSERT INTO holdings (account_id, symbol, name, quantity_units,"
+            " cost_price, price, note, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(account_id),
+                str(symbol or "").strip().upper()[:20],
+                name,
+                quantity_units,
+                cost_price,
+                price,
+                str(note or "").strip()[:200],
+                now_iso(),
+            ),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def update_holding(
+        self,
+        holding_id: int,
+        *,
+        account_id: int,
+        name: str,
+        symbol: str = "",
+        quantity_units: int,
+        cost_price: int,
+        price: int,
+        note: str = "",
+    ) -> None:
+        self.get_holding(holding_id)
+        name, quantity_units, cost_price, price = self._validate_holding(
+            account_id, name, quantity_units, cost_price, price
+        )
+        self.conn.execute(
+            "UPDATE holdings SET account_id = ?, symbol = ?, name = ?,"
+            " quantity_units = ?, cost_price = ?, price = ?, note = ?, updated_at = ?"
+            " WHERE id = ?",
+            (
+                int(account_id),
+                str(symbol or "").strip().upper()[:20],
+                name,
+                quantity_units,
+                cost_price,
+                price,
+                str(note or "").strip()[:200],
+                now_iso(),
+                holding_id,
+            ),
+        )
+        self.conn.commit()
+
+    def delete_holding(self, holding_id: int) -> None:
+        self.conn.execute("DELETE FROM holdings WHERE id = ?", (holding_id,))
+        self.conn.commit()
+
+    def holdings_summary(self, account_id: int | None = None) -> HoldingsSummary:
+        rows = self.holdings(account_id)
+        if account_id is None:
+            cost = sum(self._to_base(item.cost_value, item.currency) for item in rows)
+            market = sum(self._to_base(item.market_value, item.currency) for item in rows)
+        else:
+            cost = sum(item.cost_value for item in rows)
+            market = sum(item.market_value for item in rows)
+        return HoldingsSummary(cost=cost, market=market, count=len(rows))
+
+    def holding_usage(self, account_id: int) -> int:
+        return int(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM holdings WHERE account_id = ?", (account_id,)
+            ).fetchone()[0]
+        )
+
+    # --------------------------------------------------------------- savings
+    @staticmethod
+    def _savings_goal(row: sqlite3.Row) -> SavingsGoal:
+        return SavingsGoal(
+            id=int(row["id"]),
+            name=row["name"],
+            target_amount=int(row["target_amount"]),
+            saved_amount=int(row["saved_amount"]),
+            target_date=row["target_date"],
+            note=row["note"] or "",
+            archived=bool(row["archived"]),
+            created_at=row["created_at"] or "",
+        )
+
+    def savings_goals(self, *, include_archived: bool = False) -> list[SavingsGoal]:
+        sql = "SELECT * FROM savings_goals"
+        if not include_archived:
+            sql += " WHERE archived = 0"
+        sql += " ORDER BY (target_date IS NULL), target_date, id"
+        return [self._savings_goal(row) for row in self.conn.execute(sql)]
+
+    def get_savings_goal(self, goal_id: int) -> SavingsGoal:
+        row = self.conn.execute(
+            "SELECT * FROM savings_goals WHERE id = ?", (goal_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError("储蓄目标不存在")
+        return self._savings_goal(row)
+
+    def add_savings_goal(
+        self,
+        name: str,
+        target_amount: int,
+        *,
+        saved_amount: int = 0,
+        target_date: str | None = None,
+        note: str = "",
+    ) -> int:
+        name = self._clean_name(name, "目标名称", 60)
+        target_amount = int(target_amount)
+        saved_amount = int(saved_amount)
+        if target_amount <= 0 or target_amount > MAX_AMOUNT_CENTS:
+            raise ValueError("目标金额必须大于 0")
+        if saved_amount < 0 or saved_amount > MAX_AMOUNT_CENTS:
+            raise ValueError("已存金额无效")
+        day = normalize_day(target_date) if target_date else None
+        cursor = self.conn.execute(
+            "INSERT INTO savings_goals (name, target_amount, saved_amount,"
+            " target_date, note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (name, target_amount, saved_amount, day, str(note or "").strip()[:200], now_iso()),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def update_savings_goal(
+        self,
+        goal_id: int,
+        *,
+        name: str,
+        target_amount: int,
+        saved_amount: int,
+        target_date: str | None = None,
+        note: str = "",
+    ) -> None:
+        self.get_savings_goal(goal_id)
+        name = self._clean_name(name, "目标名称", 60)
+        target_amount = int(target_amount)
+        saved_amount = int(saved_amount)
+        if target_amount <= 0 or target_amount > MAX_AMOUNT_CENTS:
+            raise ValueError("目标金额必须大于 0")
+        if saved_amount < 0 or saved_amount > MAX_AMOUNT_CENTS:
+            raise ValueError("已存金额无效")
+        day = normalize_day(target_date) if target_date else None
+        self.conn.execute(
+            "UPDATE savings_goals SET name = ?, target_amount = ?, saved_amount = ?,"
+            " target_date = ?, note = ?, updated_at = ? WHERE id = ?",
+            (name, target_amount, saved_amount, day, str(note or "").strip()[:200], now_iso(), goal_id),
+        )
+        self.conn.commit()
+
+    def add_goal_funds(self, goal_id: int, delta: int) -> None:
+        goal = self.get_savings_goal(goal_id)
+        saved = max(0, goal.saved_amount + int(delta))
+        if saved > MAX_AMOUNT_CENTS:
+            raise ValueError("已存金额超出可记录范围")
+        self.conn.execute(
+            "UPDATE savings_goals SET saved_amount = ?, updated_at = ? WHERE id = ?",
+            (saved, now_iso(), goal_id),
+        )
+        self.conn.commit()
+
+    def delete_savings_goal(self, goal_id: int) -> None:
+        self.conn.execute("DELETE FROM savings_goals WHERE id = ?", (goal_id,))
         self.conn.commit()
 
     # ------------------------------------------------------------- categories
@@ -1257,6 +1517,7 @@ class Repository:
         to_amount: int | None = None,
         fee_waived: bool = False,
         fee_included: bool | None = None,
+        recurring_id: int | None = None,
     ) -> int:
         date = normalize_day(date)
         self._validate_txn(
@@ -1299,9 +1560,9 @@ class Repository:
             )
         cursor = self.conn.execute(
             "INSERT INTO transactions (date, kind, amount, currency, account_amount,"
-            " to_amount, fee, fee_waived, fee_included, category_id, account_id,"
-            " to_account_id, payee, note, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " to_amount, fee, fee_waived, fee_included, recurring_id, category_id,"
+            " account_id, to_account_id, payee, note, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 date,
                 kind,
@@ -1312,6 +1573,7 @@ class Repository:
                 fee,
                 int(bool(fee_waived)),
                 int(included),
+                recurring_id,
                 category_id,
                 account_id,
                 to_account_id,
@@ -1463,6 +1725,85 @@ class Repository:
             liabilities=liabilities,
             asset_accounts=sum(1 for account in accounts if account.group == "asset"),
             liability_accounts=sum(1 for account in accounts if account.group == "liability"),
+        )
+
+    def cash_flow_forecast(
+        self, months: int = 6, start_month: str | None = None
+    ) -> list[ForecastPoint]:
+        """Project recurring items plus the 3-month non-recurring average.
+
+        Only cash/debit accounts fund the starting balance; transfers are not
+        counted because they usually move money between the user's own accounts.
+        """
+        months = max(1, min(int(months), 24))
+        if start_month:
+            month_bounds(start_month)
+            start = start_month
+        else:
+            start = shift_month(month_of(today()), 1)
+        labels = [shift_month(start, index) for index in range(months)]
+        last_month = labels[-1]
+        _, horizon_end = month_bounds(last_month)
+        start_cash = sum(
+            self._to_base(account.balance, account.currency)
+            for account in self.accounts()
+            if account.type in ("cash", "debit")
+        )
+
+        history_end, _ = month_bounds(month_of(today()))
+        history_start, _ = month_bounds(shift_month(month_of(today()), -3))
+        rows = self.conn.execute(
+            "SELECT t.kind, t.amount, t.currency, t.date"
+            " FROM transactions t"
+            " WHERE t.date >= ? AND t.date < ? AND t.recurring_id IS NULL"
+            " AND t.kind IN ('income','expense')",
+            (history_start, history_end),
+        ).fetchall()
+        average = {"income": 0, "expense": 0}
+        for row in rows:
+            average[row["kind"]] += self._to_base(
+                int(row["amount"]), row["currency"], row["date"]
+            )
+        for key in average:
+            average[key] = int(round(average[key] / 3))
+
+        recurring = {"income": {}, "expense": {}}
+        for rule in self.recurring_rules(active_only=True):
+            if rule.kind not in recurring:
+                continue
+            cursor = rule.next_date
+            for _ in range(2000):
+                if cursor > horizon_end:
+                    break
+                if rule.end_date and cursor > rule.end_date:
+                    break
+                if cursor[:7] >= start:
+                    recurring[rule.kind][cursor[:7]] = recurring[rule.kind].get(
+                        cursor[:7], 0
+                    ) + self._to_base(rule.amount, rule.currency, cursor)
+                cursor = next_recurring_date(
+                    cursor, rule.frequency, rule.interval_count
+                )
+
+        points: list[ForecastPoint] = []
+        cash = start_cash
+        for month in labels:
+            income = average["income"] + recurring["income"].get(month, 0)
+            expense = average["expense"] + recurring["expense"].get(month, 0)
+            net = income - expense
+            cash += net
+            points.append(
+                ForecastPoint(
+                    month=month, income=income, expense=expense, net=net, ending_cash=cash
+                )
+            )
+        return points
+
+    def liquid_balance(self) -> int:
+        return sum(
+            self._to_base(account.balance, account.currency)
+            for account in self.accounts()
+            if account.type in ("cash", "debit")
         )
 
     def trend(self, months: int = 12, end_month: str | None = None) -> list[MonthStats]:
@@ -1624,16 +1965,40 @@ class Repository:
         return best[1] if best else None
 
     # ----------------------------------------------------------------- budgets
+    def _budget_spent(self, month: str, category_id: int) -> int:
+        spent = {item.category_id: item.amount for item in self.category_breakdown(month)}
+        return sum(spent.values()) if category_id == 0 else spent.get(category_id, 0)
+
+    def _budget_carry(
+        self, month: str, category_id: int, cache: dict[tuple[str, int], int]
+    ) -> int:
+        key = (month, category_id)
+        if key in cache:
+            return cache[key]
+        previous = shift_month(month, -1)
+        row = self.conn.execute(
+            "SELECT amount, rollover FROM budgets WHERE month = ? AND category_id = ?",
+            (previous, category_id),
+        ).fetchone()
+        if not row or not int(row["rollover"]):
+            cache[key] = 0
+            return 0
+        available = int(row["amount"]) + self._budget_carry(
+            previous, category_id, cache
+        )
+        carry = max(0, available - self._budget_spent(previous, category_id))
+        cache[key] = carry
+        return carry
+
     def budget_lines(self, month: str) -> list[BudgetLine]:
         parse_month(month)
         rows = self.conn.execute(
-            "SELECT b.id, b.month, b.category_id, b.amount, c.name, c.color"
+            "SELECT b.id, b.month, b.category_id, b.amount, b.rollover, c.name, c.color"
             " FROM budgets b LEFT JOIN categories c ON c.id = b.category_id"
             " WHERE b.month = ? ORDER BY (b.category_id = 0) DESC, b.amount DESC",
             (month,),
         ).fetchall()
-        spent = {item.category_id: item.amount for item in self.category_breakdown(month)}
-        total_spent = sum(spent.values())
+        cache: dict[tuple[str, int], int] = {}
         lines: list[BudgetLine] = []
         for row in rows:
             category_id = int(row["category_id"])
@@ -1645,12 +2010,16 @@ class Repository:
                     name="本月总预算" if category_id == 0 else (row["name"] or "未分类"),
                     color="#5B8DEF" if category_id == 0 else (row["color"] or "#95A0B5"),
                     amount=int(row["amount"]),
-                    spent=total_spent if category_id == 0 else spent.get(category_id, 0),
+                    spent=self._budget_spent(month, category_id),
+                    rollover=self._budget_carry(month, category_id, cache),
+                    rollover_enabled=bool(row["rollover"]),
                 )
             )
         return lines
 
-    def upsert_budget(self, month: str, category_id: int, amount: int) -> int:
+    def upsert_budget(
+        self, month: str, category_id: int, amount: int, rollover: bool = False
+    ) -> int:
         parse_month(month)
         category_id = int(category_id)
         if category_id:
@@ -1662,9 +2031,11 @@ class Repository:
         if amount > MAX_AMOUNT_CENTS:
             raise ValueError("预算金额超出可记录范围")
         self.conn.execute(
-            "INSERT INTO budgets (month, category_id, amount) VALUES (?, ?, ?)"
-            " ON CONFLICT(month, category_id) DO UPDATE SET amount = excluded.amount",
-            (month, category_id, amount),
+            "INSERT INTO budgets (month, category_id, amount, rollover)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(month, category_id) DO UPDATE SET amount = excluded.amount,"
+            " rollover = excluded.rollover",
+            (month, category_id, amount, int(bool(rollover))),
         )
         self.conn.commit()
         row = self.conn.execute(

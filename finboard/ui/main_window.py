@@ -31,8 +31,10 @@ from .pages import (
     AccountsPage,
     BudgetsPage,
     DashboardPage,
+    ForecastPage,
     RecurringPage,
     ReportsPage,
+    SavingsPage,
     SettingsPage,
     TransactionsPage,
 )
@@ -53,6 +55,8 @@ NAV_ITEMS = [
     ("transactions", "list", "收支明细"),
     ("accounts", "wallet", "账户"),
     ("budgets", "target", "预算"),
+    ("savings", "savings", "储蓄"),
+    ("forecast", "trending-up", "预测"),
     ("recurring", "calendar", "定期"),
     ("reports", "chart", "报表"),
 ]
@@ -136,6 +140,8 @@ class MainWindow(QMainWindow):
             "transactions": TransactionsPage(self.service, self),
             "accounts": AccountsPage(self.service, self),
             "budgets": BudgetsPage(self.service, self),
+            "savings": SavingsPage(self.service, self),
+            "forecast": ForecastPage(self.service, self),
             "recurring": RecurringPage(self.service, self),
             "reports": ReportsPage(self.service, self),
             "settings": SettingsPage(self.service, self),

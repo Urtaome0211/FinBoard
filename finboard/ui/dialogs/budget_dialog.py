@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QDialog, QFormLayout, QLabel, QLineEdit
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QFormLayout, QLabel, QLineEdit
 
 from ...core.dates import month_label
 from ...core.models import BudgetLine
@@ -85,7 +85,12 @@ class BudgetDialog(QDialog):
         form.addRow(form_label("预算金额"), self.amount_input)
         layout.addLayout(form)
 
+        self.rollover_check = QCheckBox(t("结转到下月"))
+        self.rollover_check.setToolTip(t("本月未用完的预算可以带到下个月继续使用"))
+        layout.addWidget(self.rollover_check)
+
         if line:
+            self.rollover_check.setChecked(line.rollover)
             spent = QLabel(f"本月已支出 {format_cents(line.spent, service.symbol)}")
             spent.setProperty("role", "error" if line.ratio >= 1 else "muted")
             layout.addWidget(spent)
@@ -120,7 +125,12 @@ class BudgetDialog(QDialog):
             show_error(self.error, "请选择预算对象")
             return
         try:
-            self.service.set_budget(self.month, category_id, amount)
+            self.service.set_budget(
+                self.month,
+                category_id,
+                amount,
+                rollover=self.rollover_check.isChecked(),
+            )
         except ValueError as exc:
             show_error(self.error, str(exc))
             return

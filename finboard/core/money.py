@@ -150,3 +150,41 @@ def percentage(part: int, total: int, digits: int = 1) -> float:
 
 def format_percentage(part: int, total: int, digits: int = 1) -> str:
     return f"{percentage(part, total, digits):.{digits}f}%"
+
+
+MAX_QUANTITY_UNITS = 10**13
+
+
+def parse_quantity(value: str | int | Decimal) -> int:
+    """Parse a share/unit quantity into millionths (6 decimal places)."""
+    if isinstance(value, bool):
+        raise ValueError("数量格式不正确")
+    if isinstance(value, int):
+        units = value * 1_000_000
+    else:
+        raw = unicodedata.normalize("NFKC", str(value)).strip().replace(",", "")
+        if not raw:
+            raise ValueError("请输入数量")
+        if raw.startswith("-"):
+            raise ValueError("数量必须大于 0")
+        try:
+            units = int(
+                (Decimal(raw) * Decimal(1_000_000)).quantize(
+                    Decimal("1"), rounding=ROUND_HALF_UP
+                )
+            )
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("数量格式不正确") from exc
+    if units <= 0:
+        raise ValueError("数量必须大于 0")
+    if units > MAX_QUANTITY_UNITS:
+        raise ValueError("数量超出可记录范围")
+    return units
+
+
+def format_quantity(units: int, *, max_decimals: int = 6) -> str:
+    """Format millionth-units as a compact decimal quantity."""
+    sign = "-" if units < 0 else ""
+    whole, fraction = divmod(abs(int(units)), 1_000_000)
+    text = f"{fraction:06d}"[:max_decimals].rstrip("0")
+    return f"{sign}{whole:,}" + (f".{text}" if text else "")

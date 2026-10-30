@@ -6,7 +6,8 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
 from PySide6.QtWidgets import QStyledItemDelegate, QStyle, QStyleOptionViewItem
 
-from ..core.models import KIND_LABELS, Transaction, TransactionBalance
+from ..core.models import KIND_LABELS, Holding, Transaction, TransactionBalance
+from ..core.money import format_quantity
 from ..i18n import category_display, t
 from ..core.service import FinanceService
 from .theme import colors
@@ -226,3 +227,72 @@ class KindBadgeDelegate(QStyledItemDelegate):
         painter.setPen(QColor(getattr(palette, fg_key)))
         painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)
         painter.restore()
+
+
+_HOLDING_HEADERS = ("名称", "代码", "数量", "成本价", "现价", "市值", "盈亏", "收益率")
+
+
+class HoldingTableModel(QAbstractTableModel):
+    def __init__(self, service: FinanceService, parent=None) -> None:
+        super().__init__(parent)
+        self.service = service
+        self._rows: list[Holding] = []
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
+        return 0 if parent.isValid() else len(_HOLDING_HEADERS)
+
+    def headerData(self, section: int, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return t(_HOLDING_HEADERS[section])
+        return None
+
+    def set_holdings(self, rows: list[Holding]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+
+    def holding_at(self, row: int) -> Holding | None:
+        return self._rows[row] if 0 <= row < len(self._rows) else None
+
+    def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not (0 <= index.row() < len(self._rows)):
+            return None
+        item = self._rows[index.row()]
+        column = index.column()
+        if role == Qt.ItemDataRole.UserRole:
+            return item
+        if role == Qt.ItemDataRole.DisplayRole:
+            if column == 0:
+                return item.name
+            if column == 1:
+                return item.symbol or "—"
+            if column == 2:
+                return format_quantity(item.quantity_units)
+            if column == 3:
+                return self.service.format_money(item.cost_price, item.currency)
+            if column == 4:
+                return self.service.format_money(item.price, item.currency)
+            if column == 5:
+                return self.service.format_money(item.market_value, item.currency)
+            if column == 6:
+                return self.service.format_money(item.profit, item.currency, plus=True)
+            if column == 7:
+                return f"{item.return_rate:+.2f}%"
+        if role == Qt.ItemDataRole.TextAlignmentRole and column >= 2:
+            return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if role == Qt.ItemDataRole.ForegroundRole and column in (6, 7):
+            if item.profit > 0:
+                return QColor(colors().income)
+            if item.profit < 0:
+                return QColor(colors().expense)
+            return QColor(colors().muted)
+        if role == Qt.ItemDataRole.FontRole and column == 5:
+            font = QFont()
+            font.setWeight(QFont.Weight.DemiBold)
+            return font
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return f"{item.name} · {item.account_name} · {item.note}".strip(" ·")
+        return None

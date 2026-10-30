@@ -24,6 +24,9 @@ from finboard.ui.dialogs import (  # noqa: E402
     AccountDialog,
     BudgetDialog,
     CategoryManagerDialog,
+    GoalDialog,
+    HoldingDialog,
+    HoldingsDialog,
     ReconcileDialog,
     RecurringDialog,
     TransactionDialog,
@@ -60,6 +63,8 @@ def main() -> int:
         repo.add_recurring(name="Rent", kind="expense", amount=420_000, account_id=bank.id, category_id=housing.id, frequency="monthly", start_date="2026-10-01", payee="Landlord")
         repo.add_recurring(name="Salary", kind="income", amount=1_850_000, account_id=bank.id, category_id=salary.id, frequency="monthly", start_date="2026-11-05")
         repo.add_recurring(name="Index fund", kind="transfer", amount=100_000, account_id=bank.id, to_account_id=fund.id, frequency="weekly", start_date="2026-10-28")
+        repo.add_savings_goal("Emergency fund", target_amount=5_000_000, saved_amount=1_500_000, target_date="2027-06-30")
+        repo.add_holding(fund.id, "CSI 300 ETF", symbol="510300", quantity_units=100_000_000, cost_price=40_000, price=45_000)
         investment = repo.find_category("购物", "expense")
         account = next(
             (a for a in repo.accounts() if a.type == "investment"),
@@ -78,6 +83,8 @@ def main() -> int:
             "transactions",
             "accounts",
             "budgets",
+            "savings",
+            "forecast",
             "recurring",
             "reports",
             "settings",
@@ -99,6 +106,9 @@ def main() -> int:
             ("budget", BudgetDialog(service, "2026-10", parent=window)),
             ("categories", CategoryManagerDialog(service, window)),
             ("recurring", RecurringDialog(service, parent=window)),
+            ("holdings", HoldingsDialog(service, fund, parent=window)),
+            ("holding", HoldingDialog(service, fund, parent=window)),
+            ("goal", GoalDialog(service, parent=window)),
             ("reconcile", ReconcileDialog(service, bank, parent=window)),
         ]
         dialogs.append(("valuation", ValuationDialog(service, demo_account, parent=window)))
