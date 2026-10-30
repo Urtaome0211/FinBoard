@@ -175,6 +175,93 @@ class HoldingDialog(QDialog):
         self.accept()
 
 
+class CashDialog(QDialog):
+    """Edit the uninvested cash portion of an investment account."""
+
+    def __init__(
+        self,
+        service: FinanceService,
+        account: Account,
+        *,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.service = service
+        self.account = account
+        self.setWindowTitle(t("调整现金"))
+        self.setMinimumWidth(460)
+        root = root_layout(self)
+        header, _ = dialog_header(
+            t("调整现金"),
+            f"{account.name} · {t('与持仓分开记录，不计入成本')}",
+            "cash",
+        )
+        root.addLayout(header)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(12)
+        self.amount_input = QLineEdit()
+        self.amount_input.setObjectName("AmountInput")
+        self.amount_input.setPlaceholderText("0.00")
+        self.amount_input.setText(format_cents(account.cash_balance, ""))
+        form.addRow(form_label(t("现金余额")), self.amount_input)
+        root.addLayout(form)
+
+        self.preview = QLabel()
+        self.preview.setProperty("role", "muted")
+        self.preview.setWordWrap(True)
+        root.addWidget(self.preview)
+        self.amount_input.textChanged.connect(self._update_preview)
+
+        self.error = error_label()
+        root.addWidget(self.error)
+        footer = dialog_footer(
+            self, self.error, save_text=t("保存现金"), cancel_text=t("取消")
+        )
+        self.save_button = footer.itemAt(footer.count() - 1).widget()
+        self.save_button.clicked.connect(self._save)
+        root.addLayout(footer)
+        self.amount_input.setFocus()
+        self.amount_input.selectAll()
+        self._update_preview()
+
+    def _update_preview(self) -> None:
+        try:
+            cash = parse_signed_amount(self.amount_input.text(), allow_zero=True)
+            if cash < 0:
+                raise ValueError
+            holdings = self.account.holdings_value
+            total = cash + holdings
+            self.preview.setText(
+                t("现金 {cash} + 持仓 {holdings} = 账户总值 {total}").format(
+                    cash=self.service.format_money(cash, self.account.currency),
+                    holdings=self.service.format_money(holdings, self.account.currency),
+                    total=self.service.format_money(total, self.account.currency),
+                )
+            )
+            set_error(self.amount_input, False)
+        except (ValueError, ArithmeticError):
+            self.preview.setText(t("输入现金余额后显示账户总值"))
+            set_error(self.amount_input, bool(self.amount_input.text().strip()))
+
+    def _save(self) -> None:
+        try:
+            cash = parse_signed_amount(self.amount_input.text(), allow_zero=True)
+        except ValueError as exc:
+            show_error(self.error, str(exc))
+            return
+        if cash < 0:
+            show_error(self.error, t("现金余额不能为负数"))
+            return
+        try:
+            self.service.set_cash_balance(self.account.id, cash)
+        except ValueError as exc:
+            show_error(self.error, str(exc))
+            return
+        self.accept()
+
+
 class HoldingsDialog(QDialog):
     def __init__(
         self,
@@ -202,10 +289,14 @@ class HoldingsDialog(QDialog):
         summary_layout.setSpacing(24)
         self.cost_value = ValueLabel("", size=18, weight=700)
         self.market_value = ValueLabel("", size=18, weight=700)
+        self.cash_value = ValueLabel("", size=18, weight=700)
+        self.total_value = ValueLabel("", size=18, weight=700)
         self.profit_value = ValueLabel("", size=18, weight=700)
         for label, widget in (
             (t("持仓成本"), self.cost_value),
             (t("当前市值"), self.market_value),
+            (t("现金"), self.cash_value),
+            (t("账户总值"), self.total_value),
             (t("浮动盈亏"), self.profit_value),
         ):
             column = QVBoxLayout()
@@ -252,6 +343,8 @@ class HoldingsDialog(QDialog):
         self.edit_button.clicked.connect(self._edit)
         self.delete_button = ThemedButton(t("删除"), "ghost", "trash")
         self.delete_button.clicked.connect(self._delete)
+        self.cash_button = ThemedButton(t("调整现金"), "secondary", "wallet")
+        self.cash_button.clicked.connect(self._adjust_cash)
         self.sync_button = ThemedButton(t("按市值校准账户"), "soft", "refresh")
         self.sync_button.clicked.connect(self._sync)
         self.close_button = ThemedButton(t("关闭"), "secondary")
@@ -260,6 +353,7 @@ class HoldingsDialog(QDialog):
         actions.addWidget(self.edit_button)
         actions.addWidget(self.delete_button)
         actions.addStretch(1)
+        actions.addWidget(self.cash_button)
         actions.addWidget(self.sync_button)
         actions.addWidget(self.close_button)
         root.addLayout(actions)
@@ -306,6 +400,12 @@ class HoldingsDialog(QDialog):
         self.service.delete_holding(holding.id)
         self.refresh()
 
+    def _adjust_cash(self) -> None:
+        account = self.service.repo.get_account(self.account.id)
+        dialog = CashDialog(self.service, account, parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
     def _sync(self) -> None:
         try:
             self.service.sync_holdings_value(self.account.id)
@@ -315,12 +415,19 @@ class HoldingsDialog(QDialog):
         self.refresh()
 
     def refresh(self) -> None:
+        self.account = self.service.repo.get_account(self.account.id)
         rows = self.service.holdings(self.account.id)
         self.model.set_holdings(rows)
         summary = self.service.holdings_summary(self.account.id)
         symbol = self.account.currency
         self.cost_value.setText(self.service.format_money(summary.cost, symbol))
         self.market_value.setText(self.service.format_money(summary.market, symbol))
+        self.cash_value.setText(
+            self.service.format_money(self.account.cash_balance, symbol)
+        )
+        self.total_value.setText(
+            self.service.format_money(self.account.balance, symbol)
+        )
         self.profit_value.setText(
             self.service.format_money(summary.profit, symbol, plus=True)
         )
@@ -333,4 +440,4 @@ class HoldingsDialog(QDialog):
         self._selection_changed()
 
 
-__all__ = ["HoldingDialog", "HoldingsDialog"]
+__all__ = ["CashDialog", "HoldingDialog", "HoldingsDialog"]

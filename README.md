@@ -20,23 +20,24 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 ### 功能
 
 - **总览**：净资产、本月收入/支出/结余、资产与负债百分比环图、近 6 个月趋势、最近记录、预算进度。
-- **收支明细**：按月份、类型、账户、分类筛选，支持关键词搜索；每笔显示对应账户动账后的余额（转账显示转出账户余额）；双击编辑、右键删除、Delete 删除；CSV 导出。
+- **收支明细**：按月份、类型、账户、分类、标签筛选，支持关键词搜索；每笔显示对应账户动账后的余额（转账显示转出账户余额）；双击编辑、右键删除、Delete 删除；支持拆分、标签、附件与 CSV 导出。
 - **账户**：现金、储蓄卡、投资理财、信用卡、贷款五类账户；每个账户可设自己的币种；实时余额由期初余额和流水聚合得出；信用卡/贷款按欠款金额（正数）录入，自动计入负债；支持归档与恢复。
 - **投资市值**：投资理财账户可按日记录收盘总市值，账户余额自动变为「最新市值 + 市值日之后的流水」；带历史曲线、同日覆盖、删除重算，市值变动不计入收支。
 - **多币种**：账户级 + 交易级币种；按每个交易日的汇率折算后汇总，周末和节假日沿用最近一个工作日；基准币种可切换，总览/报表/预算统一按基准币种显示。
 - **钱包提现手续费**：从「支付宝钱包」或「微信钱包」转出时，按 0.1% 自动扣手续费（支付宝最低 ¥0.10，微信最低 ¥0.01）；全部提现时手续费包含在提现金额中，部分提现时从剩余余额另扣；可勾选「本次豁免手续费」。手续费计入支出统计，报表中归入「提现手续费」。
 - **定期交易**：把房租、工资、会员费等设为每日/每周/每月/每年重复；到期后在「定期」页确认入账，可单笔或全部入账，规则可暂停、编辑、删除。
 - **账户对账**：输入银行或钱包显示的账单余额，程序计算差额并写入账户校准；不会生成收支记录，可删除对账历史撤销调整；投资账户请使用市值快照。
-- **投资持仓**：为投资账户登记股票、基金或 ETF 的数量、成本价和现价，自动计算成本、市值、浮动盈亏与收益率；可一键按市值校准账户余额。
+- **投资持仓与现金**：为投资账户登记股票、基金或 ETF 的数量、成本价和现价，自动计算成本、市值、浮动盈亏与收益率；持仓之外可单独填写现金，账户总值 = 现金 + 持仓市值，可一键按总值校准账户。
 - **预算结转**：勾选「结转到下月」后，本月未用完的正预算会带入下月；超支不结转，明细页显示结转额与可用预算。
 - **储蓄目标**：为目标设定金额、已存金额和可选日期，显示进度、剩余与达成状态，支持随时存入或取出。
 - **现金流预测**：按定期交易和最近 3 个月的非定期收支，预测未来 3/6/12 个月的收入、支出、净现金流和期末现金。
 - **汇率**：每日自动检查一次，也可在设置页手动刷新；数据来自 Frankfurter（欧洲央行参考汇率），缓存在本地，离线时继续使用最后一次汇率。
 - **预算**：按月设置总预算和分类预算，实时显示已用、剩余、使用率；超支时用红色提示；可开启跨月结转。
-- **报表**：资产/负债结构、本月支出构成、近 12 个月趋势、支出分类排行、消费对象 Top 5。
+- **报表**：资产/负债结构、本月支出构成、近 12 个月趋势、支出分类排行、消费对象 Top 5；可导出 Excel 或 PDF。
 - **记账**：支持支出、收入、账户间转账；可填写日期、金额、账户、分类、对方、备注。
 - **分类管理**：自定义支出/收入分类名称与颜色；删除分类时，历史记录自动归入「其他」。
-- **数据**：CSV 导入/导出、数据库备份、载入演示数据、清空全部数据。
+- **数据**：CSV 导入/导出（支持自定义列映射、保存导入规则、按日期/类型/金额/账户/对方去重）、数据库备份、载入演示数据、清空全部数据。
+- **交易元数据**：一笔支出/收入可拆分到多个分类（合计必须等于交易金额），可加多个标签，可把回单/发票复制为附件；转账不可拆分。
 - **体验**：浅色/深色主题一键切换、中英文界面切换（默认中文）、全局搜索、快捷键、卡片式扁平布局。
 
 ### 界面
@@ -73,6 +74,14 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 | --- | --- |
 | ![现金流预测](docs/screenshots/forecast.png) | ![英文总览](docs/screenshots/dashboard-en.png) |
 
+| CSV 导入映射 | 拆分、标签与附件 |
+| --- | --- |
+| ![CSV 导入](docs/screenshots/csv-import.png) | ![交易元数据](docs/screenshots/metadata.png) |
+
+| PDF 报表预览 |  |
+| --- | --- |
+| ![PDF 报表](docs/screenshots/report-pdf.png) |  |
+
 | English overview | English settings |
 | --- | --- |
 | ![English overview](docs/screenshots/dashboard-en.png) | ![English settings](docs/screenshots/settings-en.png) |
@@ -86,13 +95,14 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 | 语言 | Python 3.10+ |
 | GUI | PySide6 6.6+ / Qt 6 Widgets |
 | 数据库 | SQLite（标准库 `sqlite3`） |
+| 导出 | openpyxl（Excel）；Qt `QPdfWriter`（PDF） |
 | 汇率 | Frankfurter（ECB 参考汇率）+ 本地缓存 |
 | 图表 | 纯 `QPainter` 自绘（环图、折线图、条形图） |
 | 样式 | QSS + `QPalette`，双主题 |
 | 图标 | 内联 SVG，运行时着色 |
 | 打包 | PyInstaller（Windows one-dir） |
 
-运行时只依赖 PySide6。Pillow 只用于生成应用图标，PyInstaller 只用于构建 exe，二者都不是运行依赖。汇率请求使用标准库 `urllib`，没有额外的网络库。
+运行时依赖 PySide6 和 openpyxl（用于 Excel 导出）。Pillow 只用于生成应用图标，PyInstaller 只用于构建 exe，二者都不是运行依赖。PDF 由 Qt 自带的 `QPdfWriter` 生成，汇率请求使用标准库 `urllib`，没有额外的网络库。
 
 ### 快速开始
 
@@ -156,7 +166,7 @@ dist\FinBoard\FinBoard.exe --version
 8. **看报表**：在「报表」页切换月份，查看资产/负债比例、支出结构和趋势；所有汇总按交易日汇率折算为基准币种。
 9. **备份数据**：在「设置 → 数据」中备份数据库或导出 CSV。CSV 也可用于从其他软件迁移数据。
 10. **切换语言**：在「设置 → 语言」选择「中文」或「English」，切换立即生效并记住选择；默认中文。也可以在启动时用 `--language en` 临时指定。
-11. **登记持仓**：在投资账户行点「持仓」图标，添加名称、代码、数量、成本价和现价；保存后查看成本/市值/盈亏，点「按市值校准账户」把持仓市值写成当天的市值快照。
+11. **登记持仓与现金**：在投资账户行点「持仓」图标，添加名称、代码、数量、成本价和现价；点「调整现金」填写未投入持仓的现金，账户总值会按「现金 + 持仓市值」显示；点「按市值校准账户」把账户总值写成当天的市值快照。
 12. **设储蓄目标**：在「储蓄」页新建目标，填写目标金额、已存金额和可选日期；在目标行点「+」存入，点铅笔编辑，点垃圾桶删除。
 13. **看现金流预测**：在「预测」页选择未来 3/6/12 个月，查看预测曲线和逐月表；期初现金只算现金/储蓄卡账户，定期收支按计划日期投影，转账不计入。
 
@@ -190,6 +200,7 @@ dist\FinBoard\FinBoard.exe --version
 - `到账金额` 只用于跨币种转账；留空时按交易日期汇率自动折算。外币交易和跨币种转账需要本地已有对应日期的汇率。
 - 手续费是派生值，不单独占 CSV 列；导入钱包转账时按账户名、金额和日期重新计算。
 - 导入前请先建好同名、同币种的账户和分类；无法识别的行会被跳过，并在结果中给出原因。
+- 上面的表头是 FinBoard 自己的导出格式。导入外部 CSV 时可在「导入 CSV」对话框里把任意列映射到日期、类型、金额、账户等字段，并保存为规则；勾选去重后会跳过重复导入的行。
 
 ### 数据与隐私
 
@@ -222,7 +233,8 @@ finboard/
 │   ├── repository.py       # SQL 查询、写入与多币种折算
 │   ├── rates.py            # 汇率缓存、每日抓取与换算
 │   ├── fees.py             # 支付宝/微信提现手续费规则
-│   ├── csv_io.py           # CSV 导入/导出
+│   ├── csv_io.py           # CSV 导入/导出、列映射与去重
+│   ├── exporters.py        # Excel 报表导出
 │   ├── service.py          # 面向 UI 的服务层 + changed 信号
 │   ├── demo.py             # 12 个月演示数据
 │   └── paths.py            # 数据/资源路径（含 PyInstaller）
@@ -232,10 +244,11 @@ finboard/
 │   ├── icons.py            # 内联 SVG 图标
 │   ├── widgets.py          # Card、Badge、按钮、对话框基件
 │   ├── charts.py           # 环形图、趋势图、分类条形图
-│   ├── models.py           # 交易表模型与类型徽章代理
+│   ├── pdf_export.py       # QTextDocument/QPdfWriter 报表
+│   ├── models.py           # 交易表模型、持仓表模型与类型徽章代理
 │   ├── rows.py             # 交易/账户列表行
 │   ├── main_window.py      # 侧栏、顶栏、页面路由
-│   ├── dialogs/            # 记账、账户、市值、持仓、储蓄、分类、预算、定期、对账
+│   ├── dialogs/            # 记账、账户、市值、持仓、储蓄、分类、预算、定期、对账、CSV、元数据
 │   └── pages/              # 总览、明细、账户、预算、储蓄、预测、定期、报表、设置
 ├── resources/              # 图标、勾选/下拉 SVG
 └── __main__.py
@@ -249,6 +262,7 @@ tests/test_i18n.py          # 中英词典、日期/金额格式与控件跳过�
 tests/test_v2.py            # 定期交易、对账、页面/对话框集成测试
 tests/test_v21.py           # 持仓、预算结转、储蓄目标、现金流预测
 tests/test_v21_ui.py        # 持仓/储蓄目标对话框
+tests/test_v30.py           # schema v10、拆分/标签/附件、CSV 规则、Excel 导出
 scripts/                    # 冒烟、截图、图标生成
 docs/                       # 截图与 logo
 run.py                      # 源码入口
@@ -265,7 +279,7 @@ FinBoard.spec               # PyInstaller 构建配置
 - **投资市值快照**：`account_valuations` 每个账户每日最多一条；最新快照接管余额，只叠加 `date > 快照日期` 的流水。市值变化不写入 `transactions`，因此不会伪装成收入或支出；删除快照后余额自动回到上一份快照或期初余额。
 - **定期交易**：规则只保存模板和 `next_date`，到期后由用户确认才调用记账逻辑；入账后按频率推进下一次日期，月末日期会自动夹到目标月份的最后一天，超过结束日期自动停用。
 - **账户对账**：账单余额与账本余额的差额写入 `accounts.adjustment`，不产生 `transactions`，所以不会污染收支、预算和分类报表；对账历史删除时会把差额撤销。
-- **持仓**：`holdings` 用百万分之一股存储数量，成本/市值/盈亏全部用整数分计算；持仓不会自动改账户余额，需手动「按市值校准」写入当天估值。
+- **持仓与现金**：`holdings` 用百万分之一股存储数量，成本/市值/盈亏全部用整数分计算；投资账户没有市值快照时，余额 = 现金 + 持仓市值。现金通过 `accounts.adjustment` 校准，不写收支；「按市值校准」会把现金和持仓合计写成当天估值。
 - **预算结转**：只有上个月开启 rollover 且剩余为正时才带入下月，逐月递归；超支归零，避免负预算继续扩张。
 - **现金流预测**：期初现金只含现金/储蓄卡账户；非定期收支取近 3 个完整月均值，定期规则按 `next_date` 逐次投影；转账不计入。
 - **自绘图表**：环图、折线图、分类条全部在 `paintEvent` 中绘制，颜色取当前 Palette，主题切换即时重绘。
@@ -275,7 +289,7 @@ FinBoard.spec               # PyInstaller 构建配置
 ### 测试与构建
 
 ```bash
-# 单元测试（88 个）
+# 单元测试（97 个）
 python -m unittest discover -s tests
 
 # 核心冒烟（临时数据库、演示数据、CSV 往返）
@@ -301,8 +315,10 @@ python -m PyInstaller FinBoard.spec --noconfirm --clean
 - 定期交易不会在后台自动入账，必须到「定期」页确认；这是为了避免程序未运行时错过日期却静默改账。
 - 账户对账只对普通账户开放；投资账户请用市值快照校准。对账调整不写入收支，删除对账历史会撤销对应差额。
 - 单用户、单机；没有登录、加密或云同步。
-- 预算按自然月设置，不跨月结转。
-- 不直接连接银行/支付宝/微信账单，需通过 CSV 导入。
+- 预算按自然月设置；只有勾选「结转到下月」的预算才会把正剩余带入下月，超支不结转。
+- 不直接连接银行/支付宝/微信账单，需通过 CSV 导入；自定义 CSV 规则只在导入时使用，不改变原始文件。
+- 拆分、标签和附件属于本机数据；附件复制到数据目录后不加密，备份数据库时请一并备份 `attachments/`。
+- CSV 去重依据日期、类型、金额、币种、账户、转入账户和对方，不包含备注；重复导入前请确认这些字段足以识别同一笔交易。
 - one-dir 包没有单文件自解压步骤；请保持 `FinBoard.exe` 与 `_internal` 目录的相对位置。
 - 英文界面只翻译程序文案；账户名、交易对方、备注和自定义分类名属于用户数据，会保持原样。
 
@@ -323,23 +339,24 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 ### Features
 
 - **Dashboard**: net worth, monthly income/expense/balance, asset-vs-liability donut, 6-month trend, recent transactions and budget progress.
-- **Transactions**: filter by month, kind, account and category; search by payee/note; each row shows the account balance after that posting (transfers show the source account); edit, delete, export to CSV.
+- **Transactions**: filter by month, kind, account, category and tag; search by payee/note; each row shows the account balance after that posting (transfers show the source account); edit, delete, split across categories, tag, attach receipts and export to CSV.
 - **Accounts**: cash, debit card, investment, credit card and loan accounts, each with its own currency. Balances are aggregated from the opening balance and transactions in real time. Archive and restore are supported.
 - **Investment valuations**: record a closing market value per day for investment accounts. The balance becomes “latest snapshot + later transactions”, with a history chart, same-day overwrite and delete-to-recalculate. Market moves are not counted as income or expense.
 - **Multi-currency**: account-level and transaction-level currencies. Amounts are converted at the transaction-date rate, with weekend/holiday fallback to the latest business day. The base currency can be switched; dashboard, reports and budgets are shown in it.
 - **Wallet withdrawal fees**: transfers out of “支付宝钱包” or “微信钱包” automatically add a 0.1% fee (minimum ¥0.10 for Alipay, ¥0.01 for WeChat). A full withdrawal includes the fee in the withdrawn amount; a partial withdrawal deducts it from the remaining balance. Tick “Waive fee” to skip it for one transfer. Fees are counted as expenses and grouped under “提现手续费” in reports.
 - **Recurring transactions**: create daily/weekly/monthly/yearly rules for rent, salary or subscriptions. Due rules appear on the Recurring page and are posted only after you confirm, individually or all at once; rules can be paused, edited or deleted.
 - **Account reconciliation**: enter the statement balance from a bank or wallet; FinBoard calculates the difference and writes a balance adjustment without creating income/expense rows. Delete a reconciliation to undo it; investment accounts use valuation snapshots instead.
-- **Holdings**: record quantity, cost price and current price for stocks, funds or ETFs; FinBoard calculates cost basis, market value, unrealized P/L and return. A button revalues the account with the holdings total.
+- **Holdings & cash**: record quantity, cost price and current price for stocks, funds or ETFs; FinBoard calculates cost basis, market value, unrealized P/L and return. Cash not invested in holdings can be entered separately, and the account total is cash plus holdings market value. A button revalues the account with that total.
 - **Budget rollover**: with “Roll over to next month” enabled, unused positive budget carries into the next month; overspending does not.
 - **Savings goals**: set a target, saved amount and optional date; track progress, remaining amount and completion, and deposit or withdraw at any time.
 - **Cash-flow forecast**: project income, expenses, net cash flow and ending cash for the next 3/6/12 months from recurring rules and the last 3 months of non-recurring activity.
 - **Rates**: one automatic check per day plus a manual refresh in Settings. Data comes from Frankfurter (ECB reference rates) and is cached locally, so offline use keeps the last known rates.
-- **Budgets**: per-month overall and per-category limits, with spent/remaining/usage, over-budget warnings and optional rollover.
-- **Reports**: asset/liability structure, monthly expense composition, 12-month trend, category ranking and top payees.
+- **Budgets**: per-month overall and per-category limits, with spent/remaining/usage, over-budget warnings and optional rollover (only positive unused amounts carry).
+- **Reports**: asset/liability structure, monthly expense composition, 12-month trend, category ranking and top payees; export to Excel or PDF.
 - **Bookkeeping**: expenses, income and account-to-account transfers with date, amount, account, category, payee and note.
 - **Categories**: custom names and colors; deleting a category moves its history to “Other”.
-- **Data tools**: CSV import/export, database backup, demo data and full reset.
+- **Data tools**: CSV import/export with custom column mapping, saved import rules and duplicate detection (date, kind, amount, account, payee); database backup, demo data and full reset.
+- **Transaction metadata**: split an expense/income across categories (the total must equal the transaction), add multiple tags and copy receipts/invoices as attachments. Transfers cannot be split.
 - **Experience**: light/dark theme, Chinese/English interface with Chinese as the default, global search, keyboard shortcuts, flat card layout.
 
 ### Screenshots
@@ -354,7 +371,7 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 
 | Budgets | Reports |
 | --- | --- |
-| ![Budgets](docs/screenshots/budgets.png) | ![Reports](docs/screenshots/reports.png) |
+| ![Budgets](docs/screenshots/budgets-en.png) | ![Reports](docs/screenshots/reports-en.png) |
 
 | Multi-currency transactions | Rates & settings |
 | --- | --- |
@@ -376,6 +393,10 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 | --- | --- |
 | ![Cash-flow forecast](docs/screenshots/forecast-en.png) | ![Chinese overview](docs/screenshots/dashboard-light.png) |
 
+| CSV import mapping | PDF report preview |
+| --- | --- |
+| ![CSV import](docs/screenshots/csv-import-en.png) | ![PDF report](docs/screenshots/report-pdf.png) |
+
 | English dashboard | English settings |
 | --- | --- |
 | ![English dashboard](docs/screenshots/dashboard-en.png) | ![English settings](docs/screenshots/settings-en.png) |
@@ -389,13 +410,14 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 | Language | Python 3.10+ |
 | GUI | PySide6 6.6+ / Qt 6 Widgets |
 | Storage | SQLite via the standard `sqlite3` module |
+| Export | openpyxl (Excel); Qt `QPdfWriter` (PDF) |
 | FX rates | Frankfurter (ECB reference rates) + local cache |
 | Charts | Custom `QPainter` (donut, line, bars) |
 | Styling | QSS + `QPalette`, two themes |
 | Icons | Inline SVG, tinted at runtime |
 | Packaging | PyInstaller (Windows one-dir) |
 
-PySide6 is the only runtime dependency. Pillow is used only to generate the app icon and PyInstaller only to build the executable. Rate requests use the standard-library `urllib`, with no extra networking package.
+Runtime dependencies are PySide6 and openpyxl (Excel export). Pillow is used only to generate the app icon and PyInstaller only to build the executable. PDF is rendered by Qt's built-in `QPdfWriter`; rate requests use the standard-library `urllib`, with no extra networking package.
 
 ### Quick start
 
@@ -457,7 +479,7 @@ dist\FinBoard\FinBoard.exe --version
 8. **Review reports** on the Reports page; switch months to compare. All totals are converted to the base currency at each transaction's date.
 9. **Back up** from Settings → Data (database copy or CSV export).
 10. **Switch language** in Settings → Language (中文 / English). The change is immediate and remembered; Chinese is the default. `--language en` overrides it for one launch.
-11. **Track holdings** from the chart icon on an investment account: add name, symbol, quantity, cost price and current price. Review cost/market value/P&L, then click “Revalue account” to write the total as today’s valuation snapshot.
+11. **Track holdings and cash** from the chart icon on an investment account: add name, symbol, quantity, cost price and current price. Use “Adjust cash” for uninvested cash; the account total is cash plus holdings. Review cost/market value/P&L, then click “Revalue account” to write the total as today’s valuation snapshot.
 12. **Set a savings goal** on the Savings page: enter a target, saved amount and optional date. Use “+” to deposit, the pencil to edit and the trash icon to delete.
 13. **Review the cash-flow forecast** on the Forecast page for the next 3/6/12 months. Starting cash includes only cash/debit accounts; recurring rules project on their scheduled dates and transfers are excluded.
 
@@ -522,7 +544,7 @@ Default location on Windows:
 ### Testing & build
 
 ```bash
-# 88 unit tests
+# 97 unit tests
 python -m unittest discover -s tests
 
 # Core smoke test (temporary DB, demo data, CSV round-trip)
@@ -549,7 +571,9 @@ Output: `dist/FinBoard/FinBoard.exe` (one-dir; ship the whole folder).
 - Reconciliation is available for non-investment accounts only. Use valuation snapshots for investments; deleting a reconciliation reverses its adjustment.
 - Single-user, single-machine: no login, encryption or cloud sync.
 - Budgets are per calendar month and do not roll over.
-- No direct bank/Alipay/WeChat sync; use CSV import.
+- No direct bank/Alipay/WeChat sync; use CSV import. Custom CSV rules are used only during import and never modify the source file.
+- Splits, tags and attachments are local data. Attachments are copied into the data folder without encryption; back up `attachments/` together with the database.
+- CSV duplicate detection uses date, kind, amount, currency, account, destination account and payee, not the note; review these fields before re-importing a file.
 - The one-dir build has no self-extraction step; keep `FinBoard.exe` beside its `_internal` folder.
 - The English UI translates application copy only; account names, payees, notes and custom category names are user data and stay as entered.
 

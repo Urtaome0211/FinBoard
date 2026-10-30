@@ -2,23 +2,37 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ...core.dates import month_label, month_of, today
+from ...core.exporters import export_excel, report_filename
 from ...core.models import CategorySpend, PayeeSpend
 from ...i18n import category_display, t
 from ..charts import CategoryBars, DonutChart, TrendChart
+from ..pdf_export import export_pdf, pdf_filename
 from ..rows import ElidedLabel
 from ..theme import colors
 from ..widgets import (
     Card,
+    ConfirmDialog,
     EmptyState,
     MonthCombo,
     Page,
     PageHeader,
+    ThemedButton,
     ValueLabel,
     clear_layout,
 )
@@ -65,6 +79,9 @@ class ReportsPage(Page):
         self.month_combo.set_month(month_of(today()))
         self.month_combo.currentIndexChanged.connect(lambda _index: self.refresh())
         header.add_action(self.month_combo)
+        self.export_button = ThemedButton("导出报表", "secondary", "download")
+        self.export_button.clicked.connect(self._export_menu)
+        header.add_action(self.export_button)
         self.header = header
         self.body.addWidget(header)
 
@@ -236,3 +253,40 @@ class ReportsPage(Page):
             return
         for index, payee in enumerate(payees, start=1):
             self.payee_list.addWidget(RankRow(index, payee, self.service))
+
+    # ------------------------------------------------------------------ export
+    def _export_menu(self) -> None:
+        menu = QMenu(self)
+        excel = QAction(t("导出 Excel"), menu)
+        excel.triggered.connect(lambda: self._export("xlsx"))
+        pdf = QAction(t("导出 PDF"), menu)
+        pdf.triggered.connect(lambda: self._export("pdf"))
+        menu.addAction(excel)
+        menu.addAction(pdf)
+        menu.exec(
+            self.export_button.mapToGlobal(self.export_button.rect().bottomLeft())
+        )
+
+    def _export(self, kind: str) -> None:
+        month = self.month_combo.current_month()
+        if kind == "xlsx":
+            default = report_filename()
+            path, _ = QFileDialog.getSaveFileName(
+                self, t("导出 Excel"), default, "Excel (*.xlsx)"
+            )
+        else:
+            default = pdf_filename()
+            path, _ = QFileDialog.getSaveFileName(
+                self, t("导出 PDF"), default, "PDF (*.pdf)"
+            )
+        if not path:
+            return
+        try:
+            if kind == "xlsx":
+                export_excel(self.service.repo, path, month)
+            else:
+                export_pdf(self.service.repo, path, month)
+        except (OSError, ValueError) as exc:
+            ConfirmDialog.alert(self, t("导出失败"), str(exc), icon_name="alert")
+            return
+        self.window.notify(t("报表已导出：{name}", name=Path(path).name))

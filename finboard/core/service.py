@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import uuid
 
 from PySide6.QtCore import QObject, Signal
 
@@ -10,6 +12,8 @@ from . import csv_io
 from .dates import today_iso
 from .models import (
     AccountValuation,
+    Attachment,
+    CsvRule,
     ForecastPoint,
     Holding,
     HoldingsSummary,
@@ -17,10 +21,12 @@ from .models import (
     Reconciliation,
     RecurringTransaction,
     SavingsGoal,
+    Tag,
     TransactionBalance,
     TransactionFilter,
 )
 from .money import CURRENCIES, format_cents, format_compact, format_percentage
+from .paths import attachment_path, attachments_dir
 from .rates import RateSnapshot, RateStore
 from .repository import Repository
 
@@ -280,18 +286,29 @@ class FinanceService(QObject):
         self.repo.delete_holding(holding_id)
         self.changed.emit()
 
+    def set_cash_balance(self, account_id: int, target: int) -> int:
+        value = self.repo.set_cash_balance(account_id, target)
+        self.changed.emit()
+        return value
+
     def sync_holdings_value(self, account_id: int, day: str | None = None) -> int:
         summary = self.repo.holdings_summary(account_id)
         if not summary.count:
             raise ValueError("请先添加持仓")
+        account = self.repo.get_account(account_id)
+        # ``adjustment`` is added back by the balance query, so exclude it
+        # from the snapshot to avoid counting it twice.
+        cash = account.cash_balance - account.adjustment
+        snapshot = cash + summary.market
+        total = snapshot + account.adjustment
         self.repo.set_valuation(
             account_id,
             day or today_iso(),
-            summary.market,
+            snapshot,
             "按持仓市值更新",
         )
         self.changed.emit()
-        return summary.market
+        return total
 
     # ---------------------------------------------------------------- savings
     def savings_goals(self, *, include_archived: bool = False) -> list[SavingsGoal]:
@@ -324,11 +341,99 @@ class FinanceService(QObject):
         return self.repo.liquid_balance()
 
     # -------------------------------------------------------------- data tools
-    def import_csv(self, path: str | Path) -> ImportResult:
-        result = csv_io.import_csv(self.repo, path)
+    def import_csv(
+        self,
+        path: str | Path,
+        *,
+        rule: CsvRule | None = None,
+        dedup: bool = True,
+    ) -> ImportResult:
+        result = csv_io.import_csv(self.repo, path, rule=rule, dedup=dedup)
         if result.imported:
             self.changed.emit()
         return result
+
+    def import_headers(self, path: str | Path) -> list[str]:
+        return csv_io.read_headers(path)
+
+    def csv_rules(self) -> list[CsvRule]:
+        return self.repo.csv_rules()
+
+    def add_csv_rule(
+        self,
+        name: str,
+        mapping: dict[str, str],
+        *,
+        dedup: bool = True,
+    ) -> int:
+        rule_id = self.repo.add_csv_rule(name, mapping=mapping, dedup=dedup)
+        self.changed.emit()
+        return rule_id
+
+    def update_csv_rule(
+        self,
+        rule_id: int,
+        name: str,
+        mapping: dict[str, str],
+        *,
+        dedup: bool = True,
+    ) -> None:
+        self.repo.update_csv_rule(rule_id, name=name, mapping=mapping, dedup=dedup)
+        self.changed.emit()
+
+    def delete_csv_rule(self, rule_id: int) -> None:
+        self.repo.delete_csv_rule(rule_id)
+        self.changed.emit()
+
+    def tags(self) -> list[Tag]:
+        return self.repo.tags()
+
+    def set_transaction_metadata(
+        self,
+        transaction_id: int,
+        *,
+        splits: list[tuple[int, int, str]] | None = None,
+        tags: list[str] | None = None,
+    ) -> None:
+        self.repo.set_transaction_metadata(transaction_id, splits=splits, tags=tags)
+        self.changed.emit()
+
+    def attachments(self, transaction_id: int) -> list[Attachment]:
+        return self.repo.attachments(transaction_id)
+
+    def add_attachment(self, transaction_id: int, source: str | Path) -> int:
+        source = Path(source)
+        if not source.is_file():
+            raise ValueError("附件文件不存在")
+        attachments_dir()
+        suffix = source.suffix[:20]
+        stored_name = f"{uuid.uuid4().hex}{suffix}"
+        target = attachment_path(stored_name)
+        try:
+            shutil.copy2(source, target)
+        except OSError as exc:
+            raise ValueError(f"无法复制附件：{exc}") from None
+        try:
+            attachment_id = self.repo.add_attachment(
+                transaction_id,
+                filename=source.name[:255],
+                stored_name=stored_name,
+                mime_type="",
+                size=target.stat().st_size,
+            )
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+        self.changed.emit()
+        return attachment_id
+
+    def delete_attachment(self, attachment_id: int) -> None:
+        attachment = self.repo.delete_attachment(attachment_id)
+        attachment_path(attachment.stored_name).unlink(missing_ok=True)
+        self.changed.emit()
+
+    def attachment_file(self, attachment: Attachment) -> Path:
+        return attachment_path(attachment.stored_name)
 
     def export_csv(
         self, path: str | Path, filters: TransactionFilter | None = None

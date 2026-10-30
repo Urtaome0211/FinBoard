@@ -4,8 +4,10 @@ from .account_dialog import AccountDialog
 from .budget_dialog import BudgetDialog
 from .category_dialog import CategoryDialog
 from .category_manager import CategoryManagerDialog
+from .csv_import import CsvImportDialog
 from .goal_dialog import GoalDepositDialog, GoalDialog
 from .holdings_dialog import HoldingDialog, HoldingsDialog
+from .metadata_dialog import MetadataDialog
 from .reconcile_dialog import ReconcileDialog
 from .recurring_dialog import RecurringDialog
 from .transaction_dialog import TransactionDialog
@@ -16,10 +18,12 @@ __all__ = [
     "BudgetDialog",
     "CategoryDialog",
     "CategoryManagerDialog",
+    "CsvImportDialog",
     "GoalDepositDialog",
     "GoalDialog",
     "HoldingDialog",
     "HoldingsDialog",
+    "MetadataDialog",
     "ReconcileDialog",
     "RecurringDialog",
     "TransactionDialog",

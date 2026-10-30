@@ -44,6 +44,17 @@ def log_path() -> Path:
     return data_dir() / "finboard.log"
 
 
+def attachments_dir() -> Path:
+    path = data_dir() / "attachments"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def attachment_path(stored_name: str) -> Path:
+    name = Path(str(stored_name)).name
+    return attachments_dir() / name
+
+
 def portable_data_dir() -> Path:
     """Writable fallback beside the app when the user profile is unavailable."""
     if getattr(sys, "frozen", False):

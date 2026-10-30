@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from ...core.models import TransactionFilter
 from ...i18n import category_display, t
+from ..dialogs import MetadataDialog
 from ..models import KindBadgeDelegate, TransactionTableModel
 from ..widgets import (
     Card,
@@ -324,11 +325,19 @@ class TransactionsPage(Page):
         menu = QMenu(self)
         edit = QAction(t("编辑记录"), menu)
         edit.triggered.connect(lambda: self.window.open_transaction(transaction))
+        metadata = QAction(t("标签、拆分与附件…"), menu)
+        metadata.triggered.connect(lambda: self._open_metadata(transaction))
         remove = QAction(t("删除记录"), menu)
         remove.triggered.connect(lambda: self._delete(transaction))
         menu.addAction(edit)
+        menu.addAction(metadata)
+        menu.addSeparator()
         menu.addAction(remove)
         menu.exec(self.table.viewport().mapToGlobal(position))
+
+    def _open_metadata(self, transaction) -> None:
+        MetadataDialog(self.service, transaction, self).exec()
+        self.reload()
 
     def _delete_current(self) -> None:
         index = self.table.currentIndex()

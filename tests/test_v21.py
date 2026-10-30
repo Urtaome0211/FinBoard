@@ -115,6 +115,34 @@ class V21CoreTests(unittest.TestCase):
         self.assertEqual(self.repo.get_account(account).balance, 1_200_000)
         self.assertEqual(len(self.repo.valuations(account)), 1)
 
+    def test_investment_cash_and_holdings_make_total(self) -> None:
+        account = self.repo.add_account("证券账户", "investment", 100_000)
+        self.repo.add_holding(
+            account,
+            "ETF",
+            quantity_units=100_000_000,
+            cost_price=40_000,
+            price=45_000,
+        )
+        current = self.repo.get_account(account)
+        self.assertEqual(current.holdings_value, 4_500_000)
+        self.assertEqual(current.cash_balance, 100_000)
+        self.assertEqual(current.balance, 4_600_000)
+        self.service.set_cash_balance(account, 500_000)
+        current = self.repo.get_account(account)
+        self.assertEqual(current.cash_balance, 500_000)
+        self.assertEqual(current.balance, 5_000_000)
+        total = self.service.sync_holdings_value(account, "2026-10-30")
+        self.assertEqual(total, 5_000_000)
+        valuation = self.repo.valuations(account)[0]
+        self.assertEqual(valuation.value, 4_600_000)
+        self.assertEqual(self.repo.get_account(account).balance, 5_000_000)
+
+    def test_investment_cash_rejects_negative(self) -> None:
+        account = self.repo.add_account("证券账户", "investment", 0)
+        with self.assertRaises(ValueError):
+            self.service.set_cash_balance(account, -1)
+
     def test_savings_goal_progress_and_deposit(self) -> None:
         goal_id = self.repo.add_savings_goal(
             "应急金", target_amount=500_000, saved_amount=100_000

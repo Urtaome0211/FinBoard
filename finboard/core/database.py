@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 10
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -167,6 +167,77 @@ CREATE INDEX IF NOT EXISTS idx_reconciliations_account
     ON account_reconciliations(account_id, date);
 """
 
+SCHEMA_V8 = """
+ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+UPDATE accounts SET sort_order = id WHERE sort_order = 0;
+CREATE INDEX IF NOT EXISTS idx_accounts_sort ON accounts(sort_order);
+"""
+
+SCHEMA_V9 = """
+DROP INDEX IF EXISTS idx_accounts_sort;
+ALTER TABLE accounts DROP COLUMN sort_order;
+"""
+
+SCHEMA_V10 = """
+ALTER TABLE transactions ADD COLUMN import_hash TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_import_hash
+    ON transactions(import_hash) WHERE import_hash IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS tags (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    color      TEXT    NOT NULL DEFAULT '#5B8DEF',
+    created_at TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS transaction_tags (
+    transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    tag_id         INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (transaction_id, tag_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_tags_tag
+    ON transaction_tags(tag_id, transaction_id);
+
+CREATE TABLE IF NOT EXISTS transaction_splits (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    category_id    INTEGER NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
+    amount         INTEGER NOT NULL CHECK (amount > 0),
+    note           TEXT    NOT NULL DEFAULT '',
+    position       INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_splits_transaction
+    ON transaction_splits(transaction_id, position);
+
+CREATE TABLE IF NOT EXISTS attachments (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    filename       TEXT    NOT NULL,
+    stored_name    TEXT    NOT NULL,
+    mime_type      TEXT    NOT NULL DEFAULT '',
+    size           INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_transaction
+    ON attachments(transaction_id);
+
+CREATE TABLE IF NOT EXISTS csv_import_rules (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    mapping             TEXT    NOT NULL DEFAULT '{}',
+    default_kind        TEXT    NOT NULL DEFAULT 'expense',
+    default_account_id  INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+    default_category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+    dedup               INTEGER NOT NULL DEFAULT 1 CHECK (dedup IN (0,1)),
+    created_at          TEXT    NOT NULL,
+    updated_at          TEXT
+);
+"""
+
 SCHEMA_V7 = """
 ALTER TABLE budgets ADD COLUMN rollover INTEGER NOT NULL DEFAULT 0
     CHECK (rollover IN (0,1));
@@ -262,6 +333,15 @@ class Database:
         if version < 7:
             conn.executescript(SCHEMA_V7)
             version = 7
+        if version < 8:
+            conn.executescript(SCHEMA_V8)
+            version = 8
+        if version < 9:
+            conn.executescript(SCHEMA_V9)
+            version = 9
+        if version < 10:
+            conn.executescript(SCHEMA_V10)
+            version = 10
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

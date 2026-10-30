@@ -6,6 +6,8 @@ Qt.  That keeps the financial logic unit-testable without a display server.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import calendar
 import sqlite3
 from datetime import date as date_cls
@@ -31,9 +33,11 @@ from .models import (
     ACCOUNT_TYPE_META,
     Account,
     AccountValuation,
+    Attachment,
     BudgetLine,
     Category,
     CategorySpend,
+    CsvRule,
     FALLBACK_CATEGORY,
     ForecastPoint,
     Holding,
@@ -45,16 +49,18 @@ from .models import (
     Reconciliation,
     RecurringTransaction,
     SavingsGoal,
+    Tag,
     Transaction,
     TransactionBalance,
     TransactionFilter,
+    TransactionSplit,
 )
 from .money import CURRENCIES, MAX_AMOUNT_CENTS, MAX_QUANTITY_UNITS
 from .rates import RateError, RateStore
 
 _TXN_SELECT = """
 SELECT t.id, t.date, t.kind, t.amount, t.currency, t.account_amount, t.to_amount, t.fee,
-       t.fee_waived, t.fee_included, t.recurring_id,
+       t.fee_waived, t.fee_included, t.recurring_id, t.import_hash,
        t.category_id, c.name AS category_name, c.color AS category_color,
        t.account_id, a.name AS account_name, a.currency AS account_currency,
        t.to_account_id, ta.name AS to_account_name,
@@ -163,6 +169,7 @@ class Repository:
             last_valuation_date=row["last_valuation_date"] or "",
             valuation_count=int(row["valuation_count"] or 0),
             adjustment=int(row["adjustment"] or 0),
+            holdings_value=int(row["holdings_value"] or 0),
         )
 
     @staticmethod
@@ -193,6 +200,7 @@ class Repository:
             ),
             account_currency=row["account_currency"] or "CNY",
             to_account_currency=row["to_account_currency"] or "CNY",
+            import_hash=row["import_hash"] or "",
         )
 
     @staticmethod
@@ -237,6 +245,7 @@ class Repository:
                    vc.valuation_count AS valuation_count,
                    lv.value AS last_valuation,
                    lv.date AS last_valuation_date,
+                   COALESCE(hv.market, 0) AS holdings_value,
                    CASE
                        WHEN a.type = 'investment' AND lv.value IS NOT NULL
                        THEN lv.value + a.adjustment + COALESCE(SUM(CASE
@@ -264,10 +273,17 @@ class Repository:
                                     ELSE 0 END)
                            WHEN t.kind = 'transfer' AND t.to_account_id = a.id THEN  t.to_amount
                            ELSE 0 END), 0)
+                           + CASE WHEN a.type = 'investment' THEN COALESCE(hv.market, 0) ELSE 0 END
                    END AS balance
             FROM accounts a
             LEFT JOIN transactions t
                    ON t.account_id = a.id OR t.to_account_id = a.id
+            LEFT JOIN (
+                SELECT account_id,
+                       SUM((quantity_units * price + 500000) / 1000000) AS market
+                FROM holdings
+                GROUP BY account_id
+            ) hv ON hv.account_id = a.id
             LEFT JOIN (
                 SELECT account_id, COUNT(*) AS valuation_count, MAX(date) AS latest_date
                 FROM account_valuations
@@ -298,8 +314,8 @@ class Repository:
     def _available_before(
         self, account_id: int, exclude_transaction_id: int | None = None
     ) -> int:
-        """Balance available to a new transfer, excluding an edited row."""
-        balance = self.account_balance(account_id)
+        """Cash available to a new transfer, excluding an edited row."""
+        balance = self.get_account(account_id, include_archived=True).cash_balance
         if exclude_transaction_id is None:
             return balance
         old = self.get_transaction(exclude_transaction_id)
@@ -1071,6 +1087,26 @@ class Repository:
             market = sum(item.market_value for item in rows)
         return HoldingsSummary(cost=cost, market=market, count=len(rows))
 
+    def set_cash_balance(self, account_id: int, target: int) -> int:
+        """Set the cash portion of an investment account without touching holdings."""
+        account = self.get_account(account_id, include_archived=True)
+        if account.type != "investment":
+            raise ValueError("只有投资账户可以调整现金")
+        target = int(target)
+        if target < 0:
+            raise ValueError("现金余额不能为负数")
+        if target > MAX_AMOUNT_CENTS:
+            raise ValueError("金额过大")
+        current = account.cash_balance
+        delta = target - current
+        if delta:
+            self.conn.execute(
+                "UPDATE accounts SET adjustment = adjustment + ? WHERE id = ?",
+                (delta, account_id),
+            )
+            self.conn.commit()
+        return target
+
     def holding_usage(self, account_id: int) -> int:
         return int(
             self.conn.execute(
@@ -1263,6 +1299,77 @@ class Repository:
         return fallback.name
 
     # ----------------------------------------------------------- transactions
+    def _hydrate(self, transactions: list[Transaction]) -> list[Transaction]:
+        """Attach splits, tags and attachment metadata without N+1 queries."""
+        if not transactions:
+            return transactions
+        ids = tuple(transaction.id for transaction in transactions)
+        placeholders = ",".join("?" for _ in ids)
+
+        tag_map: dict[int, list[Tag]] = {}
+        for row in self.conn.execute(
+            "SELECT tt.transaction_id, g.id, g.name, g.color FROM transaction_tags tt"
+            " JOIN tags g ON g.id = tt.tag_id WHERE tt.transaction_id IN ("
+            + placeholders
+            + ") ORDER BY g.name",
+            ids,
+        ):
+            tag_map.setdefault(int(row["transaction_id"]), []).append(
+                Tag(int(row[1]), row[2], row[3] or "#5B8DEF")
+            )
+
+        split_map: dict[int, list[TransactionSplit]] = {}
+        for row in self.conn.execute(
+            "SELECT s.id, s.transaction_id, s.category_id, c.name, c.color,"
+            " s.amount, s.note, s.position FROM transaction_splits s"
+            " JOIN categories c ON c.id = s.category_id"
+            " WHERE s.transaction_id IN (" + placeholders + ")"
+            " ORDER BY s.transaction_id, s.position, s.id",
+            ids,
+        ):
+            split_map.setdefault(int(row["transaction_id"]), []).append(
+                TransactionSplit(
+                    id=int(row["id"]),
+                    transaction_id=int(row["transaction_id"]),
+                    category_id=int(row["category_id"]),
+                    category_name=row["name"] or "",
+                    category_color=row["color"] or "",
+                    amount=int(row["amount"]),
+                    note=row["note"] or "",
+                    position=int(row["position"]),
+                )
+            )
+
+        attachment_map: dict[int, list[Attachment]] = {}
+        for row in self.conn.execute(
+            "SELECT id, transaction_id, filename, stored_name, mime_type, size,"
+            " created_at FROM attachments WHERE transaction_id IN ("
+            + placeholders
+            + ") ORDER BY created_at, id",
+            ids,
+        ):
+            attachment_map.setdefault(int(row["transaction_id"]), []).append(
+                Attachment(
+                    id=int(row["id"]),
+                    transaction_id=int(row["transaction_id"]),
+                    filename=row["filename"],
+                    stored_name=row["stored_name"],
+                    mime_type=row["mime_type"] or "",
+                    size=int(row["size"] or 0),
+                    created_at=row["created_at"] or "",
+                )
+            )
+
+        return [
+            replace(
+                transaction,
+                tags=tuple(tag_map.get(transaction.id, ())),
+                splits=tuple(split_map.get(transaction.id, ())),
+                attachments=tuple(attachment_map.get(transaction.id, ())),
+            )
+            for transaction in transactions
+        ]
+
     def _where_clause(self, filters: TransactionFilter) -> tuple[str, list[object]]:
         clauses: list[str] = []
         params: list[object] = []
@@ -1274,19 +1381,31 @@ class Repository:
             clauses.append("t.kind = ?")
             params.append(filters.kind)
         if filters.category_id:
-            clauses.append("t.category_id = ?")
-            params.append(filters.category_id)
+            clauses.append(
+                "(t.category_id = ? OR EXISTS (SELECT 1 FROM transaction_splits xs"
+                " WHERE xs.transaction_id = t.id AND xs.category_id = ?))"
+            )
+            params.extend([filters.category_id, filters.category_id])
         if filters.account_id:
             clauses.append("(t.account_id = ? OR t.to_account_id = ?)")
             params.extend([filters.account_id, filters.account_id])
+        if filters.tag_id:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM transaction_tags xt"
+                " WHERE xt.transaction_id = t.id AND xt.tag_id = ?)"
+            )
+            params.append(filters.tag_id)
         search = (filters.search or "").strip()
         if search:
             like = f"%{search}%"
             clauses.append(
                 "(t.payee LIKE ? OR t.note LIKE ? OR COALESCE(c.name,'') LIKE ?"
-                " OR a.name LIKE ? OR COALESCE(ta.name,'') LIKE ?)"
+                " OR a.name LIKE ? OR COALESCE(ta.name,'') LIKE ?"
+                " OR EXISTS (SELECT 1 FROM transaction_tags xt"
+                " JOIN tags g ON g.id = xt.tag_id"
+                " WHERE xt.transaction_id = t.id AND g.name LIKE ?))"
             )
-            params.extend([like, like, like, like, like])
+            params.extend([like, like, like, like, like, like])
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         return where, params
 
@@ -1300,7 +1419,7 @@ class Repository:
             + " ORDER BY t.date DESC, t.id DESC LIMIT ?",
             (*params, limit),
         ).fetchall()
-        return [self._transaction(row) for row in rows]
+        return self._hydrate([self._transaction(row) for row in rows])
 
     def transaction_balances(
         self, transaction_ids: Iterable[int] | None = None
@@ -1438,7 +1557,7 @@ class Repository:
         rows = self.conn.execute(
             _TXN_SELECT + " ORDER BY t.date DESC, t.id DESC LIMIT ?", (limit,)
         ).fetchall()
-        return [self._transaction(row) for row in rows]
+        return self._hydrate([self._transaction(row) for row in rows])
 
     def get_transaction(self, transaction_id: int) -> Transaction:
         row = self.conn.execute(
@@ -1446,7 +1565,7 @@ class Repository:
         ).fetchone()
         if not row:
             raise ValueError("记录不存在")
-        return self._transaction(row)
+        return self._hydrate([self._transaction(row)])[0]
 
     def _validate_txn(
         self,
@@ -1501,6 +1620,96 @@ class Repository:
             raise ValueError("折算后的金额超出可记录范围")
         return value
 
+    def _normalize_splits(
+        self,
+        kind: str,
+        amount: int,
+        splits: Iterable[tuple[int, int, str]] | None,
+    ) -> list[tuple[int, int, str]]:
+        if not splits:
+            return []
+        if kind == "transfer":
+            raise ValueError("转账不能拆分")
+        result: list[tuple[int, int, str]] = []
+        total = 0
+        for category_id, split_amount, note in splits:
+            category = self.get_category(int(category_id))
+            if category is None or category.kind != kind:
+                raise ValueError("拆分分类与收支类型不匹配")
+            value = int(split_amount)
+            if value <= 0:
+                raise ValueError("拆分金额必须大于 0")
+            total += value
+            result.append(
+                (category.id, value, str(note or "").strip()[:100])
+            )
+        if total != int(amount):
+            raise ValueError("拆分金额合计必须等于交易金额")
+        return result
+
+    @staticmethod
+    def _normalize_tags(tags: Iterable[str] | None) -> list[str]:
+        if not tags:
+            return []
+        seen: set[str] = set()
+        result: list[str] = []
+        for raw in tags:
+            name = str(raw or "").strip()[:20]
+            if not name or name.casefold() in seen:
+                continue
+            seen.add(name.casefold())
+            result.append(name)
+            if len(result) >= 20:
+                break
+        return result
+
+    def _replace_splits(
+        self, transaction_id: int, splits: list[tuple[int, int, str]]
+    ) -> None:
+        self.conn.execute(
+            "DELETE FROM transaction_splits WHERE transaction_id = ?",
+            (transaction_id,),
+        )
+        for position, (category_id, split_amount, note) in enumerate(splits):
+            self.conn.execute(
+                "INSERT INTO transaction_splits"
+                " (transaction_id, category_id, amount, note, position)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (transaction_id, category_id, split_amount, note, position),
+            )
+
+    def _replace_tags(self, transaction_id: int, tags: list[str]) -> None:
+        self.conn.execute(
+            "DELETE FROM transaction_tags WHERE transaction_id = ?",
+            (transaction_id,),
+        )
+        for name in tags:
+            row = self.conn.execute(
+                "SELECT id FROM tags WHERE name = ? COLLATE NOCASE", (name,)
+            ).fetchone()
+            if row:
+                tag_id = int(row["id"])
+            else:
+                cursor = self.conn.execute(
+                    "INSERT INTO tags (name, color, created_at) VALUES (?, ?, ?)",
+                    (name, "#5B8DEF", now_iso()),
+                )
+                tag_id = int(cursor.lastrowid)
+            self.conn.execute(
+                "INSERT OR IGNORE INTO transaction_tags (transaction_id, tag_id)"
+                " VALUES (?, ?)",
+                (transaction_id, tag_id),
+            )
+
+    def _save_metadata(
+        self,
+        transaction_id: int,
+        splits: list[tuple[int, int, str]],
+        tags: list[str],
+    ) -> None:
+        self._replace_splits(transaction_id, splits)
+        self._replace_tags(transaction_id, tags)
+
     def add_transaction(
         self,
         *,
@@ -1518,6 +1727,9 @@ class Repository:
         fee_waived: bool = False,
         fee_included: bool | None = None,
         recurring_id: int | None = None,
+        splits: Iterable[tuple[int, int, str]] | None = None,
+        tags: Iterable[str] | None = None,
+        import_hash: str | None = None,
     ) -> int:
         date = normalize_day(date)
         self._validate_txn(
@@ -1528,6 +1740,8 @@ class Repository:
             to_account_id=to_account_id,
             currency=currency,
         )
+        split_rows = self._normalize_splits(kind, amount, splits)
+        tag_names = self._normalize_tags(tags)
         account = self.get_account(account_id, include_archived=True)
         posted = (
             self._converted(amount, currency, account.currency, date)
@@ -1561,8 +1775,8 @@ class Repository:
         cursor = self.conn.execute(
             "INSERT INTO transactions (date, kind, amount, currency, account_amount,"
             " to_amount, fee, fee_waived, fee_included, recurring_id, category_id,"
-            " account_id, to_account_id, payee, note, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " account_id, to_account_id, payee, note, import_hash, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 date,
                 kind,
@@ -1579,11 +1793,14 @@ class Repository:
                 to_account_id,
                 str(payee or "").strip()[:60],
                 str(note or "").strip()[:200],
+                str(import_hash or "") or None,
                 now_iso(),
             ),
         )
+        transaction_id = int(cursor.lastrowid)
+        self._save_metadata(transaction_id, split_rows, tag_names)
         self.conn.commit()
-        return int(cursor.lastrowid)
+        return transaction_id
 
     def update_transaction(
         self,
@@ -1602,6 +1819,8 @@ class Repository:
         to_amount: int | None = None,
         fee_waived: bool = False,
         fee_included: bool | None = None,
+        splits: Iterable[tuple[int, int, str]] | None = None,
+        tags: Iterable[str] | None = None,
     ) -> None:
         self.get_transaction(transaction_id)
         date = normalize_day(date)
@@ -1612,6 +1831,12 @@ class Repository:
             category_id=category_id,
             to_account_id=to_account_id,
             currency=currency,
+        )
+        split_rows = (
+            self._normalize_splits(kind, amount, splits) if splits is not None else None
+        )
+        tag_names = (
+            self._normalize_tags(tags) if tags is not None else None
         )
         account = self.get_account(account_id, include_archived=True)
         posted = (
@@ -1668,11 +1893,265 @@ class Repository:
                 transaction_id,
             ),
         )
+        if split_rows is not None:
+            self._replace_splits(transaction_id, split_rows)
+        if tag_names is not None:
+            self._replace_tags(transaction_id, tag_names)
         self.conn.commit()
 
     def delete_transaction(self, transaction_id: int) -> None:
         self.conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
         self.conn.commit()
+
+    def set_transaction_metadata(
+        self,
+        transaction_id: int,
+        *,
+        splits: list[tuple[int, int, str]] | None = None,
+        tags: list[str] | None = None,
+    ) -> None:
+        transaction = self.get_transaction(transaction_id)
+        split_rows = (
+            self._normalize_splits(transaction.kind, transaction.amount, splits)
+            if splits is not None
+            else None
+        )
+        tag_names = self._normalize_tags(tags) if tags is not None else None
+        if split_rows is not None:
+            self._replace_splits(transaction_id, split_rows)
+        if tag_names is not None:
+            self._replace_tags(transaction_id, tag_names)
+        self.conn.commit()
+
+    # ------------------------------------------------------- tags & attachments
+    def tags(self) -> list[Tag]:
+        return [
+            Tag(int(row["id"]), row["name"], row["color"] or "#5B8DEF")
+            for row in self.conn.execute(
+                "SELECT id, name, color FROM tags ORDER BY name"
+            )
+        ]
+
+    def attachments(self, transaction_id: int) -> list[Attachment]:
+        return [
+            Attachment(
+                id=int(row["id"]),
+                transaction_id=int(row["transaction_id"]),
+                filename=row["filename"],
+                stored_name=row["stored_name"],
+                mime_type=row["mime_type"] or "",
+                size=int(row["size"] or 0),
+                created_at=row["created_at"] or "",
+            )
+            for row in self.conn.execute(
+                "SELECT * FROM attachments WHERE transaction_id = ?"
+                " ORDER BY created_at, id",
+                (transaction_id,),
+            )
+        ]
+
+    def get_attachment(self, attachment_id: int) -> Attachment:
+        row = self.conn.execute(
+            "SELECT * FROM attachments WHERE id = ?", (attachment_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError("附件不存在")
+        return Attachment(
+            id=int(row["id"]),
+            transaction_id=int(row["transaction_id"]),
+            filename=row["filename"],
+            stored_name=row["stored_name"],
+            mime_type=row["mime_type"] or "",
+            size=int(row["size"] or 0),
+            created_at=row["created_at"] or "",
+        )
+
+    def add_attachment(
+        self,
+        transaction_id: int,
+        *,
+        filename: str,
+        stored_name: str,
+        mime_type: str = "",
+        size: int = 0,
+    ) -> int:
+        self.get_transaction(transaction_id)
+        cursor = self.conn.execute(
+            "INSERT INTO attachments"
+            " (transaction_id, filename, stored_name, mime_type, size, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                transaction_id,
+                str(filename)[:255],
+                str(stored_name)[:255],
+                str(mime_type)[:100],
+                int(size),
+                now_iso(),
+            ),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def delete_attachment(self, attachment_id: int) -> Attachment:
+        attachment = self.get_attachment(attachment_id)
+        self.conn.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
+        self.conn.commit()
+        return attachment
+
+    # ----------------------------------------------------------- CSV import rules
+    def csv_rules(self) -> list[CsvRule]:
+        return [
+            self._csv_rule(row)
+            for row in self.conn.execute(
+                "SELECT * FROM csv_import_rules ORDER BY name COLLATE NOCASE"
+            )
+        ]
+
+    def get_csv_rule(self, rule_id: int) -> CsvRule:
+        row = self.conn.execute(
+            "SELECT * FROM csv_import_rules WHERE id = ?", (rule_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError("导入规则不存在")
+        return self._csv_rule(row)
+
+    @staticmethod
+    def _csv_rule(row: sqlite3.Row) -> CsvRule:
+        try:
+            mapping = json.loads(row["mapping"] or "{}")
+        except (TypeError, ValueError):
+            mapping = {}
+        return CsvRule(
+            id=int(row["id"]),
+            name=row["name"],
+            mapping={str(key): str(value) for key, value in mapping.items()},
+            default_kind=row["default_kind"] or "expense",
+            default_account_id=(
+                int(row["default_account_id"])
+                if row["default_account_id"] is not None
+                else None
+            ),
+            default_category_id=(
+                int(row["default_category_id"])
+                if row["default_category_id"] is not None
+                else None
+            ),
+            dedup=bool(row["dedup"]),
+            created_at=row["created_at"] or "",
+            updated_at=row["updated_at"] or "",
+        )
+
+    def add_csv_rule(
+        self,
+        name: str,
+        *,
+        mapping: dict[str, str],
+        default_kind: str = "expense",
+        default_account_id: int | None = None,
+        default_category_id: int | None = None,
+        dedup: bool = True,
+    ) -> int:
+        name = str(name or "").strip()[:60]
+        if not name:
+            raise ValueError("规则名称不能为空")
+        try:
+            cursor = self.conn.execute(
+                "INSERT INTO csv_import_rules"
+                " (name, mapping, default_kind, default_account_id,"
+                " default_category_id, dedup, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    name,
+                    json.dumps(mapping, ensure_ascii=False),
+                    default_kind,
+                    default_account_id,
+                    default_category_id,
+                    int(bool(dedup)),
+                    now_iso(),
+                ),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError("同名导入规则已存在") from None
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def update_csv_rule(
+        self,
+        rule_id: int,
+        *,
+        name: str,
+        mapping: dict[str, str],
+        default_kind: str = "expense",
+        default_account_id: int | None = None,
+        default_category_id: int | None = None,
+        dedup: bool = True,
+    ) -> None:
+        name = str(name or "").strip()[:60]
+        if not name:
+            raise ValueError("规则名称不能为空")
+        try:
+            self.conn.execute(
+                "UPDATE csv_import_rules SET name = ?, mapping = ?,"
+                " default_kind = ?, default_account_id = ?, default_category_id = ?,"
+                " dedup = ?, updated_at = ? WHERE id = ?",
+                (
+                    name,
+                    json.dumps(mapping, ensure_ascii=False),
+                    default_kind,
+                    default_account_id,
+                    default_category_id,
+                    int(bool(dedup)),
+                    now_iso(),
+                    rule_id,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError("同名导入规则已存在") from None
+        self.conn.commit()
+
+    def delete_csv_rule(self, rule_id: int) -> None:
+        self.conn.execute("DELETE FROM csv_import_rules WHERE id = ?", (rule_id,))
+        self.conn.commit()
+
+    def import_hash_exists(self, import_hash: str) -> bool:
+        if not import_hash:
+            return False
+        return (
+            self.conn.execute(
+                "SELECT 1 FROM transactions WHERE import_hash = ?", (import_hash,)
+            ).fetchone()
+            is not None
+        )
+
+    def transaction_matches(
+        self,
+        *,
+        date: str,
+        kind: str,
+        amount: int,
+        currency: str,
+        account_id: int,
+        to_account_id: int | None,
+        payee: str,
+    ) -> bool:
+        return (
+            self.conn.execute(
+                "SELECT 1 FROM transactions WHERE date = ? AND kind = ?"
+                " AND amount = ? AND currency = ? AND account_id = ?"
+                " AND COALESCE(to_account_id, 0) = ?"
+                " AND lower(trim(payee)) = lower(trim(?))",
+                (
+                    date,
+                    kind,
+                    int(amount),
+                    currency.upper(),
+                    int(account_id),
+                    int(to_account_id or 0),
+                    payee or "",
+                ),
+            ).fetchone()
+            is not None
+        )
 
     # -------------------------------------------------------------- analytics
     def _to_base(self, amount: int, currency: str, day: str | None = None) -> int:
@@ -1853,9 +2332,18 @@ class Repository:
         rows = self.conn.execute(
             "SELECT c.id, c.name, c.color, t.amount, t.currency, t.date"
             " FROM transactions t JOIN categories c ON c.id = t.category_id"
+            " WHERE t.kind = ? AND NOT EXISTS (SELECT 1 FROM transaction_splits s"
+            " WHERE s.transaction_id = t.id)" + date_clause,
+            params,
+        ).fetchall()
+        split_rows = self.conn.execute(
+            "SELECT c.id, c.name, c.color, s.amount, t.currency, t.date"
+            " FROM transaction_splits s JOIN transactions t ON t.id = s.transaction_id"
+            " JOIN categories c ON c.id = s.category_id"
             " WHERE t.kind = ?" + date_clause,
             params,
         ).fetchall()
+        rows = list(rows) + list(split_rows)
         grouped: dict[int, dict[str, object]] = {}
         for row in rows:
             item = grouped.setdefault(
@@ -1954,9 +2442,9 @@ class Repository:
             _TXN_SELECT + clause,
             tuple(params),
         ).fetchall()
+        hydrated = self._hydrate([self._transaction(row) for row in rows])
         best: tuple[int, Transaction] | None = None
-        for row in rows:
-            transaction = self._transaction(row)
+        for transaction in hydrated:
             value = self._to_base(
                 transaction.amount, transaction.currency, transaction.date
             )
@@ -2082,8 +2570,8 @@ class Repository:
                 conn.execute(
                     "INSERT INTO transactions (date, kind, amount, currency,"
                     " account_amount, to_amount, fee, category_id, account_id,"
-                    " to_account_id, payee, note, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " to_account_id, payee, note, import_hash, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         row["date"],
                         row["kind"],
@@ -2097,6 +2585,7 @@ class Repository:
                         row.get("to_account_id"),
                         row.get("payee", ""),
                         row.get("note", ""),
+                        row.get("import_hash") or None,
                         now_iso(),
                     ),
                 )

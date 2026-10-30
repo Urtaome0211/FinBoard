@@ -72,6 +72,14 @@ class Account:
     last_valuation_date: str = ""
     valuation_count: int = 0
     adjustment: int = 0
+    holdings_value: int = 0
+
+    @property
+    def cash_balance(self) -> int:
+        """Cash part of an investment account (total value minus holdings)."""
+        if self.type == "investment":
+            return self.balance - self.holdings_value
+        return self.balance
 
     @property
     def type_label(self) -> str:
@@ -239,6 +247,49 @@ class Category:
 
 
 @dataclass(frozen=True)
+class Tag:
+    id: int
+    name: str
+    color: str = "#5B8DEF"
+
+
+@dataclass(frozen=True)
+class TransactionSplit:
+    id: int
+    transaction_id: int
+    category_id: int
+    category_name: str
+    category_color: str
+    amount: int
+    note: str = ""
+    position: int = 0
+
+
+@dataclass(frozen=True)
+class Attachment:
+    id: int
+    transaction_id: int
+    filename: str
+    stored_name: str
+    mime_type: str = ""
+    size: int = 0
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
+class CsvRule:
+    id: int
+    name: str
+    mapping: dict[str, str] = field(default_factory=dict)
+    default_kind: str = "expense"
+    default_account_id: int | None = None
+    default_category_id: int | None = None
+    dedup: bool = True
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass(frozen=True)
 class Transaction:
     id: int
     date: str
@@ -263,6 +314,10 @@ class Transaction:
     recurring_id: int | None = None
     account_currency: str = "CNY"
     to_account_currency: str = "CNY"
+    import_hash: str = ""
+    splits: tuple[TransactionSplit, ...] = ()
+    tags: tuple[Tag, ...] = ()
+    attachments: tuple[Attachment, ...] = ()
 
     @property
     def signed_amount(self) -> int:
@@ -283,6 +338,18 @@ class Transaction:
         if self.kind == "transfer":
             return f"{self.account_name} → {self.to_account_name}"
         return self.account_name
+
+    @property
+    def has_splits(self) -> bool:
+        return bool(self.splits)
+
+    @property
+    def split_total(self) -> int:
+        return sum(split.amount for split in self.splits)
+
+    @property
+    def tag_names(self) -> list[str]:
+        return [tag.name for tag in self.tags]
 
 
 @dataclass(frozen=True)
@@ -377,6 +444,7 @@ class TransactionFilter:
     kind: str | None = None
     category_id: int | None = None
     account_id: int | None = None
+    tag_id: int | None = None
     search: str = ""
     limit: int = 500
 
@@ -385,6 +453,7 @@ class TransactionFilter:
 class ImportResult:
     imported: int = 0
     skipped: int = 0
+    duplicates: int = 0
     errors: list[str] = field(default_factory=list)
 
     @property

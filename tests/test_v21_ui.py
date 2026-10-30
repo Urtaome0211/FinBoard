@@ -16,7 +16,7 @@ from finboard.core.repository import Repository  # noqa: E402
 from finboard.core.service import FinanceService  # noqa: E402
 from finboard.i18n import set_language  # noqa: E402
 from finboard.ui.dialogs.goal_dialog import GoalDepositDialog, GoalDialog  # noqa: E402
-from finboard.ui.dialogs.holdings_dialog import HoldingDialog  # noqa: E402
+from finboard.ui.dialogs.holdings_dialog import CashDialog, HoldingDialog  # noqa: E402
 
 
 class V21DialogTests(unittest.TestCase):
@@ -99,6 +99,27 @@ class V21DialogTests(unittest.TestCase):
             self.assertEqual(self.repo.holdings(account_id), [])
         finally:
             dialog.deleteLater()
+
+    def test_cash_dialog_saves_cash(self) -> None:
+        account_id = self.repo.add_account("证券账户3", "investment", 100_000)
+        self.repo.add_holding(
+            account_id,
+            "ETF",
+            quantity_units=100_000_000,
+            cost_price=40_000,
+            price=45_000,
+        )
+        dialog = CashDialog(self.service, self.repo.get_account(account_id))
+        try:
+            dialog.amount_input.setText("5,000")
+            dialog.save_button.click()
+            self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+            account = self.repo.get_account(account_id)
+            self.assertEqual(account.cash_balance, 500_000)
+            self.assertEqual(account.balance, 5_000_000)
+        finally:
+            dialog.deleteLater()
+
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from ... import __app_name__, __app_name_cn__, __version__
 from ...i18n import currency_display, language, t
 from ...core.money import CURRENCIES
-from ..dialogs import CategoryManagerDialog
+from ..dialogs import CategoryManagerDialog, CsvImportDialog
 from ..theme import theme_mode, theme_store
 from ..widgets import (
     Card,
@@ -328,28 +328,8 @@ class SettingsPage(Page):
         self.window.notify(f"已导出 {count} 条记录")
 
     def _import(self) -> None:
-        path, _filter = QFileDialog.getOpenFileName(
-            self, "导入 CSV", str(Path.home()), "CSV 文件 (*.csv);;所有文件 (*)"
-        )
-        if not path:
-            return
-        try:
-            result = self.service.import_csv(path)
-        except (OSError, ValueError) as exc:
-            ConfirmDialog.alert(self, "导入失败", str(exc), icon_name="alert")
-            return
-        if not result.imported and not result.skipped:
-            ConfirmDialog.alert(
-                self, "没有可导入的记录", "文件为空，或表头不符合要求。", icon_name="info"
-            )
-            return
-        message = f"成功导入 {result.imported} 条，跳过 {result.skipped} 条。"
-        if result.errors:
-            message += "\n\n" + "\n".join(result.errors[:6])
-            if len(result.errors) > 6:
-                message += f"\n…另有 {len(result.errors) - 6} 条错误"
-        ConfirmDialog.alert(self, "导入完成", message, icon_name="check")
-        self.window.notify(f"已导入 {result.imported} 条记录")
+        dialog = CsvImportDialog(self.service, self)
+        dialog.exec()
 
     def _backup(self) -> None:
         desktop = Path.home() / "Desktop"

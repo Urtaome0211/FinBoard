@@ -209,10 +209,14 @@ class AccountRow(QFrame):
         note = account.note or t("负债账户" if is_liability else "资产账户")
         if account.type == "investment":
             note = account.note or t("投资账户")
+            note = (
+                f"{note} · {t('现金')} "
+                f"{service.format_money(account.cash_balance, account.currency)}"
+                f" · {t('持仓')} "
+                f"{service.format_money(account.holdings_value, account.currency)}"
+            )
             if account.last_valuation_date:
                 note = f"{note} · {t('市值')} {account.last_valuation_date}"
-            else:
-                note = f"{note} · {t('尚未记录市值')}"
         if account.currency != "CNY":
             note = f"{account.currency} · {note}"
         if account.adjustment:
