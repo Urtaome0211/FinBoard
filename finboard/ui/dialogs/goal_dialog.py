@@ -77,9 +77,13 @@ class GoalDialog(QDialog):
         root.addWidget(self.preview)
         self.error = error_label()
         root.addWidget(self.error)
-        root.addLayout(
-            dialog_footer(self, self.error, save_text=t("保存目标"), cancel_text=t("取消"))
+        footer = dialog_footer(
+            self, self.error, save_text=t("保存目标"), cancel_text=t("取消")
         )
+        save_button = footer.itemAt(footer.count() - 1).widget()
+        self.save_button = save_button
+        save_button.clicked.connect(self._save)
+        root.addLayout(footer)
 
         for field in (self.target_input, self.saved_input):
             field.textChanged.connect(self._update_preview)
@@ -181,9 +185,11 @@ class GoalDepositDialog(QDialog):
         root.addLayout(form)
         self.error = error_label()
         root.addWidget(self.error)
-        root.addLayout(
-            dialog_footer(self, self.error, save_text=t("存入"), cancel_text=t("取消"))
-        )
+        footer = dialog_footer(self, self.error, save_text=t("存入"), cancel_text=t("取消"))
+        save_button = footer.itemAt(footer.count() - 1).widget()
+        self.save_button = save_button
+        save_button.clicked.connect(self._save)
+        root.addLayout(footer)
         self.amount_input.setFocus()
 
     def _save(self) -> None:

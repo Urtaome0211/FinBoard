@@ -275,7 +275,7 @@ FinBoard.spec               # PyInstaller 构建配置
 ### 测试与构建
 
 ```bash
-# 单元测试（87 个）
+# 单元测试（88 个）
 python -m unittest discover -s tests
 
 # 核心冒烟（临时数据库、演示数据、CSV 往返）
@@ -522,7 +522,7 @@ Default location on Windows:
 ### Testing & build
 
 ```bash
-# 87 unit tests
+# 88 unit tests
 python -m unittest discover -s tests
 
 # Core smoke test (temporary DB, demo data, CSV round-trip)

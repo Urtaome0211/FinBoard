@@ -15,7 +15,7 @@ from finboard.core.database import Database  # noqa: E402
 from finboard.core.repository import Repository  # noqa: E402
 from finboard.core.service import FinanceService  # noqa: E402
 from finboard.i18n import set_language  # noqa: E402
-from finboard.ui.dialogs.goal_dialog import GoalDialog  # noqa: E402
+from finboard.ui.dialogs.goal_dialog import GoalDepositDialog, GoalDialog  # noqa: E402
 from finboard.ui.dialogs.holdings_dialog import HoldingDialog  # noqa: E402
 
 
@@ -43,13 +43,25 @@ class V21DialogTests(unittest.TestCase):
             dialog.name_input.setText("应急金")
             dialog.target_input.setText("50,000")
             dialog.saved_input.setText("10,000")
-            dialog._save()
+            dialog.save_button.click()
             self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
             goals = self.repo.savings_goals()
             self.assertEqual(len(goals), 1)
             self.assertEqual(goals[0].name, "应急金")
             self.assertEqual(goals[0].target_amount, 5_000_000)
             self.assertEqual(goals[0].saved_amount, 1_000_000)
+        finally:
+            dialog.deleteLater()
+
+    def test_goal_deposit_dialog_saves_via_button(self) -> None:
+        goal_id = self.repo.add_savings_goal("旅行", 500_000, saved_amount=100_000)
+        goal = self.repo.get_savings_goal(goal_id)
+        dialog = GoalDepositDialog(self.service, goal)
+        try:
+            dialog.amount_input.setText("2000")
+            dialog.save_button.click()
+            self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+            self.assertEqual(self.repo.get_savings_goal(goal_id).saved_amount, 300_000)
         finally:
             dialog.deleteLater()
 
@@ -63,7 +75,7 @@ class V21DialogTests(unittest.TestCase):
             dialog.quantity_input.setText("100")
             dialog.cost_input.setText("4.00")
             dialog.price_input.setText("4.50")
-            dialog._save()
+            dialog.save_button.click()
             self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
             holdings = self.repo.holdings(account_id)
             self.assertEqual(len(holdings), 1)
@@ -82,7 +94,7 @@ class V21DialogTests(unittest.TestCase):
             dialog.quantity_input.setText("0")
             dialog.cost_input.setText("10")
             dialog.price_input.setText("12")
-            dialog._save()
+            dialog.save_button.click()
             self.assertNotEqual(dialog.result(), dialog.DialogCode.Accepted)
             self.assertEqual(self.repo.holdings(account_id), [])
         finally:

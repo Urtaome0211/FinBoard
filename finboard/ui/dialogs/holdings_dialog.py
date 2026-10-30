@@ -90,9 +90,13 @@ class HoldingDialog(QDialog):
         self.error = error_label()
         root.addWidget(self.error)
         root.addStretch(1)
-        root.addLayout(
-            dialog_footer(self, self.error, save_text=t("保存持仓"), cancel_text=t("取消"))
+        footer = dialog_footer(
+            self, self.error, save_text=t("保存持仓"), cancel_text=t("取消")
         )
+        save_button = footer.itemAt(footer.count() - 1).widget()
+        self.save_button = save_button
+        save_button.clicked.connect(self._save)
+        root.addLayout(footer)
 
         for field in (self.quantity_input, self.cost_input, self.price_input):
             field.textChanged.connect(self._update_preview)
