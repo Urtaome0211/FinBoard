@@ -7,7 +7,14 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from . import csv_io
-from .models import AccountValuation, ImportResult, TransactionBalance, TransactionFilter
+from .models import (
+    AccountValuation,
+    ImportResult,
+    Reconciliation,
+    RecurringTransaction,
+    TransactionBalance,
+    TransactionFilter,
+)
 from .money import CURRENCIES, format_cents, format_compact, format_percentage
 from .rates import RateSnapshot, RateStore
 from .repository import Repository
@@ -69,6 +76,11 @@ class FinanceService(QObject):
 
     def to_base(self, cents: int, currency: str, day: str | None = None) -> int:
         return self.repo._to_base(cents, currency, day)
+
+    def available_balance(
+        self, account_id: int, exclude_transaction_id: int | None = None
+    ) -> int:
+        return self.repo.available_balance(account_id, exclude_transaction_id)
 
     def refresh(self) -> None:
         self.changed.emit()
@@ -160,6 +172,61 @@ class FinanceService(QObject):
 
     def delete_valuation(self, valuation_id: int) -> None:
         self.repo.delete_valuation(valuation_id)
+        self.changed.emit()
+
+    # --------------------------------------------------------------- recurring
+    def recurring_rules(
+        self, *, active_only: bool = False
+    ) -> list[RecurringTransaction]:
+        return self.repo.recurring_rules(active_only=active_only)
+
+    def due_recurring(self, day: str | None = None) -> list[RecurringTransaction]:
+        return self.repo.due_recurring(day)
+
+    def add_recurring(self, **fields) -> int:
+        recurring_id = self.repo.add_recurring(**fields)
+        self.changed.emit()
+        return recurring_id
+
+    def update_recurring(self, recurring_id: int, **fields) -> None:
+        self.repo.update_recurring(recurring_id, **fields)
+        self.changed.emit()
+
+    def delete_recurring(self, recurring_id: int) -> None:
+        self.repo.delete_recurring(recurring_id)
+        self.changed.emit()
+
+    def set_recurring_active(self, recurring_id: int, active: bool) -> None:
+        self.repo.set_recurring_active(recurring_id, active)
+        self.changed.emit()
+
+    def post_recurring(self, recurring_id: int) -> int:
+        transaction_id = self.repo.post_recurring(recurring_id)
+        self.changed.emit()
+        return transaction_id
+
+    # ---------------------------------------------------------- reconciliation
+    def reconciliations(
+        self, account_id: int, *, limit: int = 50
+    ) -> list[Reconciliation]:
+        return self.repo.reconciliations(account_id, limit=limit)
+
+    def reconcile_account(
+        self,
+        account_id: int,
+        statement_balance: int,
+        *,
+        day: str | None = None,
+        note: str = "",
+    ) -> Reconciliation:
+        reconciliation = self.repo.reconcile_account(
+            account_id, statement_balance, day=day, note=note
+        )
+        self.changed.emit()
+        return reconciliation
+
+    def delete_reconciliation(self, reconciliation_id: int) -> None:
+        self.repo.delete_reconciliation(reconciliation_id)
         self.changed.emit()
 
     # -------------------------------------------------------------- categories

@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QCloseEvent, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -23,12 +23,15 @@ from PySide6.QtWidgets import (
 from ..core.dates import full_date_label, month_of, today
 from ..core.models import Account, Transaction
 from ..core.rates import RateSnapshot, RateStore
+from ..i18n import is_english, language, set_language as set_ui_language, t
 from .dialogs import AccountDialog, TransactionDialog
 from .icons import app_icon
+from .localize import apply_locale, localize_widgets
 from .pages import (
     AccountsPage,
     BudgetsPage,
     DashboardPage,
+    RecurringPage,
     ReportsPage,
     SettingsPage,
     TransactionsPage,
@@ -50,6 +53,7 @@ NAV_ITEMS = [
     ("transactions", "list", "收支明细"),
     ("accounts", "wallet", "账户"),
     ("budgets", "target", "预算"),
+    ("recurring", "calendar", "定期"),
     ("reports", "chart", "报表"),
 ]
 
@@ -68,19 +72,28 @@ class _RateFetchThread(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, service: "FinanceService", settings: QSettings | None = None) -> None:
+    def __init__(
+        self,
+        service: "FinanceService",
+        settings: QSettings | None = None,
+        *,
+        language: str | None = None,
+        theme: str | None = None,
+    ) -> None:
         super().__init__()
         self.service = service
         self.settings = settings or QSettings("FinBoard", "FinBoard")
         self.current_key = "dashboard"
         self._rate_thread: _RateFetchThread | None = None
+        set_ui_language(language or str(self.settings.value("language", "zh")))
+        apply_locale()
 
-        mode = str(self.settings.value("theme", "light"))
+        mode = theme or str(self.settings.value("theme", "light"))
         if mode not in ("light", "dark"):
             mode = "light"
         apply_theme(QApplication.instance(), mode)
 
-        self.setWindowTitle("FinBoard · 财观 — 个人财务管理")
+        self.setWindowTitle(t("FinBoard · 财观 — 个人财务管理"))
         self.setWindowIcon(app_icon())
         self.setMinimumSize(1100, 720)
         self.resize(1400, 880)
@@ -92,6 +105,7 @@ class MainWindow(QMainWindow):
         self._update_currency_chip()
         self._update_sidebar_balance()
         self.refresh_all()
+        localize_widgets(self)
 
         self.service.changed.connect(self._on_data_changed)
         theme_store.changed.connect(self._on_theme_changed)
@@ -122,6 +136,7 @@ class MainWindow(QMainWindow):
             "transactions": TransactionsPage(self.service, self),
             "accounts": AccountsPage(self.service, self),
             "budgets": BudgetsPage(self.service, self),
+            "recurring": RecurringPage(self.service, self),
             "reports": ReportsPage(self.service, self),
             "settings": SettingsPage(self.service, self),
         }
@@ -284,6 +299,7 @@ class MainWindow(QMainWindow):
             page.refresh()
         self.search_timer.stop()
         self._position_toast()
+        localize_widgets(self)
 
     def refresh_all(self) -> None:
         for page in self.pages.values():
@@ -291,6 +307,7 @@ class MainWindow(QMainWindow):
                 page.refresh()
         self._update_currency_chip()
         self._update_sidebar_balance()
+        localize_widgets(self)
 
     def _on_data_changed(self) -> None:
         self.refresh_all()
@@ -341,32 +358,36 @@ class MainWindow(QMainWindow):
         self.sidebar_balance.set_tone(
             "income" if stats.net > 0 else ("expense" if stats.net < 0 else "text")
         )
-        self.sidebar_hint.setText(f"净资产 {self.service.format(worth.net)}")
+        self.sidebar_hint.setText(t("净资产 {amount}", amount=self.service.format(worth.net)))
 
     def _update_greeting(self) -> None:
         hour = datetime.now().hour
         if hour < 6:
-            phrase = "夜深了"
+            phrase = t("夜深了")
         elif hour < 12:
-            phrase = "早上好"
+            phrase = t("早上好")
         elif hour < 14:
-            phrase = "中午好"
+            phrase = t("中午好")
         elif hour < 18:
-            phrase = "下午好"
+            phrase = t("下午好")
         else:
-            phrase = "晚上好"
+            phrase = t("晚上好")
         self.greeting_label.setText(phrase)
         self.date_label.setText(full_date_label(today()))
 
     # ------------------------------------------------------------------ dialogs
     def open_transaction(self, transaction: Transaction | None = None) -> None:
-        TransactionDialog(self.service, transaction, parent=self).exec()
+        dialog = TransactionDialog(self.service, transaction, parent=self)
+        localize_widgets(dialog)
+        dialog.exec()
 
     def open_account(self, account: Account | None = None) -> None:
-        AccountDialog(self.service, account, parent=self).exec()
+        dialog = AccountDialog(self.service, account, parent=self)
+        localize_widgets(dialog)
+        dialog.exec()
 
     def notify(self, text: str) -> None:
-        self.toast.setText(text)
+        self.toast.setText(t(text))
         self.toast.adjustSize()
         self.toast.setFixedHeight(max(36, self.toast.sizeHint().height()))
         self.toast.show()
@@ -383,6 +404,37 @@ class MainWindow(QMainWindow):
         x = max(12, parent.width() - self.toast.width() - 28)
         y = max(12, parent.height() - self.toast.height() - 22)
         self.toast.move(x, y)
+
+    # ------------------------------------------------------------------ language
+    def set_language(self, code: str) -> None:
+        """Switch UI language and rebuild the window in place."""
+        if code not in ("zh", "en") or code == language():
+            return
+        self.settings.setValue("language", code)
+        set_ui_language(code)
+        apply_locale()
+        app = QApplication.instance()
+        if app is not None:
+            app.setFont(QFont("Segoe UI" if is_english() else "Microsoft YaHei UI", 10))
+        QTimer.singleShot(0, self._rebuild_for_language)
+
+    def _rebuild_for_language(self) -> None:
+        key = self.current_key
+        self.toast_timer.stop()
+        self.setWindowTitle(t("FinBoard · 财观 — 个人财务管理"))
+        old = self.takeCentralWidget()
+        if old is not None:
+            old.deleteLater()
+        self.pages.clear()
+        self.nav_buttons.clear()
+        self._build_ui()
+        self.navigate(key)
+        self._update_greeting()
+        self._update_currency_chip()
+        self._update_sidebar_balance()
+        self._update_theme_button()
+        self._apply_titlebar()
+        localize_widgets(self)
 
     # ------------------------------------------------------------------ theme
     def toggle_theme(self) -> None:
@@ -404,7 +456,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "theme_button"):
             return
         self.theme_button.set_icon_name("sun" if is_dark() else "moon")
-        self.theme_button.setToolTip("切换浅色 / 深色主题")
+        self.theme_button.setToolTip(t("切换浅色 / 深色主题"))
 
     def _style_toast(self) -> None:
         if not hasattr(self, "toast"):
@@ -431,7 +483,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("currency", code)
         self._update_currency_chip()
         self.refresh_all()
-        self.notify(f"货币已切换为 {code}")
+        self.notify(t("货币已切换为 {code}", code=code))
 
     # ------------------------------------------------------------------ search
     def _focus_search(self) -> None:

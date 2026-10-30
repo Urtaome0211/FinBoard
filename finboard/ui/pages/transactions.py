@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.models import TransactionFilter
+from ...i18n import category_display, t
 from ..models import KindBadgeDelegate, TransactionTableModel
 from ..widgets import (
     Card,
@@ -47,9 +48,9 @@ class TransactionsPage(Page):
         self._loading = False
 
         header = PageHeader("收支明细", "")
-        export_button = ThemedButton("导出 CSV", "secondary", "download")
+        export_button = ThemedButton(t("导出 CSV"), "secondary", "download")
         export_button.clicked.connect(self._export)
-        record_button = ThemedButton("记一笔", "primary", "plus")
+        record_button = ThemedButton(t("记一笔"), "primary", "plus")
         record_button.clicked.connect(lambda: self.window.open_transaction())
         header.add_action(export_button)
         header.add_action(record_button)
@@ -59,7 +60,7 @@ class TransactionsPage(Page):
         filter_card = Card(padding=14, spacing=10)
         filters = QHBoxLayout()
         filters.setSpacing(10)
-        self.search = SearchInput("搜索对方或备注…")
+        self.search = SearchInput(t("搜索对方或备注…"))
         self.search.setMinimumWidth(190)
         filters.addWidget(self.search, 1)
 
@@ -67,20 +68,26 @@ class TransactionsPage(Page):
         filters.addWidget(self.month_combo)
 
         self.kind_control = SegmentedControl(
-            [("全部", None), ("支出", "expense"), ("收入", "income"), ("转账", "transfer")],
+            [
+                (t("全部"), None),
+                (t("支出"), "expense"),
+                (t("收入"), "income"),
+                (t("转账"), "transfer"),
+            ],
             None,
         )
         filters.addWidget(self.kind_control)
 
         self.account_combo = ComboBox()
         self.account_combo.setMinimumWidth(140)
+        self.account_combo.setProperty("i18nSkip", True)
         filters.addWidget(self.account_combo)
 
         self.category_combo = ComboBox()
         self.category_combo.setMinimumWidth(120)
         filters.addWidget(self.category_combo)
 
-        self.reset_button = ThemedButton("重置", "ghost", "refresh")
+        self.reset_button = ThemedButton(t("重置"), "ghost", "refresh")
         self.reset_button.clicked.connect(self._reset_filters)
         filters.addWidget(self.reset_button)
         filter_card.body.addLayout(filters)
@@ -116,18 +123,18 @@ class TransactionsPage(Page):
         header_view.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         header_view.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(0, 104)
-        self.table.setColumnWidth(1, 86)
-        self.table.setColumnWidth(3, 100)
+        self.table.setColumnWidth(1, 96)
+        self.table.setColumnWidth(3, 120)
         self.table.setColumnWidth(4, 210)
-        self.table.setColumnWidth(5, 165)
+        self.table.setColumnWidth(5, 148)
         self.table.setColumnWidth(6, 118)
-        self.table.setColumnWidth(7, 80)
+        self.table.setColumnWidth(7, 70)
 
         self.empty = EmptyState(
             "list",
-            "没有找到记录",
-            "换一个筛选条件，或先记一笔。",
-            "记一笔",
+            t("没有找到记录"),
+            t("换一个筛选条件，或先记一笔。"),
+            t("记一笔"),
             lambda: self.window.open_transaction(),
         )
         table_wrap = QWidget()
@@ -146,7 +153,7 @@ class TransactionsPage(Page):
         self.summary.setProperty("role", "muted")
         footer_layout.addWidget(self.summary)
         footer_layout.addStretch(1)
-        self.hint = QLabel("双击编辑 · 右键删除")
+        self.hint = QLabel(t("双击编辑 · 右键删除"))
         self.hint.setProperty("role", "faint")
         footer_layout.addWidget(self.hint)
         self.body.addWidget(footer)
@@ -172,9 +179,9 @@ class TransactionsPage(Page):
         account_id = self.account_combo.currentData()
         category_id = self.category_combo.currentData()
         self.account_combo.clear()
-        self.account_combo.addItem("全部账户", None)
+        self.account_combo.addItem(t("全部账户"), None)
         for account in self.service.repo.accounts(include_archived=True):
-            suffix = "（已归档）" if account.archived else ""
+            suffix = t("（已归档）") if account.archived else ""
             self.account_combo.addItem(account.name + suffix, account.id)
         if account_id is not None:
             index = self.account_combo.findData(account_id)
@@ -189,7 +196,7 @@ class TransactionsPage(Page):
         if category_id is None and hasattr(self, "category_combo"):
             category_id = self.category_combo.currentData()
         self.category_combo.clear()
-        self.category_combo.addItem("全部分类", None)
+        self.category_combo.addItem(t("全部分类"), None)
         if kind == "transfer":
             self.category_combo.setEnabled(False)
             return
@@ -197,11 +204,9 @@ class TransactionsPage(Page):
         kinds = [kind] if kind in ("expense", "income") else ["expense", "income"]
         for category_kind in kinds:
             for category in self.service.repo.categories(category_kind):
-                label = (
-                    f"{category.name}"
-                    if len(kinds) == 1
-                    else f"{category.name} · {category.kind_label}"
-                )
+                label = category_display(category.name)
+                if len(kinds) > 1:
+                    label += f" · {t(category.kind_label)}"
                 self.category_combo.addItem(label, category.id)
         if category_id is not None:
             index = self.category_combo.findData(category_id)
@@ -243,7 +248,7 @@ class TransactionsPage(Page):
         balances = self.service.transaction_balances([row.id for row in rows])
         self.model.set_transactions(rows, balances)
         count = self.service.repo.count_transactions(filters)
-        self.header.set_subtitle(f"共 {count} 笔记录")
+        self.header.set_subtitle(t("共 {count} 笔记录", count=count))
         if rows:
             self.stack.setCurrentWidget(self.table_card)
         else:
@@ -265,14 +270,18 @@ class TransactionsPage(Page):
                 if row.kind == "transfer" and row.fee
             )
         except ValueError:
-            self.summary.setText(f"当前 {len(rows)} 笔 · 汇率不足，无法汇总")
+            self.summary.setText(
+                t("当前 {count} 笔 · 汇率不足，无法汇总", count=len(rows))
+            )
             return
-        text = (
-            f"当前 {len(rows)} 笔 · 收入 {self.service.format(income)} · "
-            f"支出 {self.service.format(expense)}"
+        text = t(
+            "当前 {count} 笔 · 收入 {income} · 支出 {expense}",
+            count=len(rows),
+            income=self.service.format(income),
+            expense=self.service.format(expense),
         )
         if count > len(rows):
-            text += f" · 仅显示最新 {len(rows)} 笔"
+            text += t(" · 仅显示最新 {count} 笔", count=len(rows))
         self.summary.setText(text)
 
     def refresh(self) -> None:
@@ -313,9 +322,9 @@ class TransactionsPage(Page):
         if not transaction:
             return
         menu = QMenu(self)
-        edit = QAction("编辑记录", menu)
+        edit = QAction(t("编辑记录"), menu)
         edit.triggered.connect(lambda: self.window.open_transaction(transaction))
-        remove = QAction("删除记录", menu)
+        remove = QAction(t("删除记录"), menu)
         remove.triggered.connect(lambda: self._delete(transaction))
         menu.addAction(edit)
         menu.addAction(remove)
@@ -332,10 +341,14 @@ class TransactionsPage(Page):
     def _delete(self, transaction) -> None:
         if not ConfirmDialog.confirm(
             self,
-            "删除这笔记录？",
-            f"{transaction.date} · {transaction.title}\n"
-            f"{self.service.format(transaction.amount)}，删除后账户余额会同步调整。",
-            ok_text="删除",
+            t("删除这笔记录？"),
+            t(
+                "{date} · {title}\n{amount}，删除后账户余额会同步调整。",
+                date=transaction.date,
+                title=transaction.title,
+                amount=self.service.format(transaction.amount),
+            ),
+            ok_text=t("删除"),
             danger=True,
             icon_name="trash",
         ):
@@ -346,16 +359,18 @@ class TransactionsPage(Page):
             ConfirmDialog.alert(self, "删除失败", str(exc), icon_name="alert")
 
     def _export(self) -> None:
-        month = self.month_combo.current_month() or "全部"
-        default = Path.home() / "Desktop" / f"FinBoard-收支明细-{month}.csv"
+        month = self.month_combo.current_month() or t("全部")
+        default = Path.home() / "Desktop" / f"FinBoard-收入支出-{month}.csv"
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出收支明细", str(default), "CSV 文件 (*.csv)"
+            self, t("导出收支明细"), str(default), t("CSV 文件 (*.csv)")
         )
         if not path:
             return
         try:
             count = self.service.export_csv(path, self.filters(limit=100_000))
         except (OSError, ValueError) as exc:
-            ConfirmDialog.alert(self, "导出失败", str(exc), icon_name="alert")
+            ConfirmDialog.alert(self, t("导出失败"), str(exc), icon_name="alert")
             return
-        self.window.notify(f"已导出 {count} 笔记录到 {Path(path).name}")
+        self.window.notify(
+            t("已导出 {count} 笔记录到 {name}", count=count, name=Path(path).name)
+        )

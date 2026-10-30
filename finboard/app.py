@@ -20,7 +20,9 @@ from .core.models import TransactionFilter
 from .core.paths import default_db_path, demo_db_path, log_path, portable_data_dir
 from .core.repository import Repository
 from .core.service import FinanceService
+from .i18n import is_english, set_language, t
 from .ui.icons import app_icon
+from .ui.localize import apply_locale, install_localizer
 from .ui.main_window import MainWindow
 from .ui.theme import apply_theme
 
@@ -38,6 +40,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--db", type=Path, help="指定数据库文件")
     parser.add_argument("--theme", choices=("light", "dark"), help="启动主题")
+    parser.add_argument("--language", choices=("zh", "en"), help="启动语言")
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser.parse_args(argv)
@@ -105,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     _set_windows_app_id()
 
     app = QApplication(sys.argv[:1])
+    install_localizer(app)
     app.setApplicationName(__app_name__)
     app.setApplicationDisplayName(f"{__app_name__} · {__app_name_cn__}")
     app.setOrganizationName(__app_name__)
@@ -114,9 +118,15 @@ def main(argv: list[str] | None = None) -> int:
     app.setFont(QFont("Microsoft YaHei UI", 10))
 
     settings = QSettings("FinBoard", "FinBoard")
+    # The command-line language is a one-launch override; do not persist it.
+    initial_language = args.language or str(settings.value("language", "zh"))
+    set_language(initial_language)
+    apply_locale()
     if args.theme:
         settings.setValue("theme", args.theme)
-    apply_theme(app, str(settings.value("theme", "light")))
+    initial_theme = args.theme or str(settings.value("theme", "light"))
+    apply_theme(app, initial_theme)
+    app.setFont(QFont("Segoe UI" if is_english() else "Microsoft YaHei UI", 10))
 
     db_path = args.db or (demo_db_path() if (args.demo or args.reset_demo) else default_db_path())
     _install_excepthook()
@@ -132,10 +142,12 @@ def main(argv: list[str] | None = None) -> int:
 
     service = FinanceService(repo, str(settings.value("currency", "CNY")))
 
-    window = MainWindow(service, settings)
+    window = MainWindow(
+        service, settings, language=initial_language, theme=initial_theme
+    )
     window.show()
     if fallback is not None:
-        window.notify(f"默认数据目录不可写，已改用 {fallback.parent}")
+        window.notify(t("默认数据目录不可写，已改用 {path}", path=fallback.parent))
     if args.smoke_test:
         QTimer.singleShot(1200, app.quit)
     log.info(

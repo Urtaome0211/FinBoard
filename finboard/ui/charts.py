@@ -11,7 +11,8 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from ..core.dates import short_month_label
 from ..core.models import AccountValuation, CategorySpend, MonthStats
-from ..core.money import format_cents, format_compact, format_percentage, percentage
+from ..core.money import format_cents, format_percentage, percentage
+from ..i18n import category_display, compact_amount, t
 from .theme import colors, theme_store
 
 
@@ -23,7 +24,7 @@ class DonutChart(QWidget):
         self._segments: list[tuple[str, int, str]] = []
         self._center_title = ""
         self._center_value = ""
-        self._empty_text = "暂无数据"
+        self._empty_text = t("暂无数据")
         self.setMinimumSize(180, 180)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         theme_store.changed.connect(self.update)
@@ -34,12 +35,12 @@ class DonutChart(QWidget):
         *,
         center_title: str = "",
         center_value: str = "",
-        empty_text: str = "暂无数据",
+        empty_text: str = "",
     ) -> None:
         self._segments = [(label, max(0, int(value)), color) for label, value, color in segments]
         self._center_title = center_title
         self._center_value = center_value
-        self._empty_text = empty_text
+        self._empty_text = empty_text or t("暂无数据")
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -158,7 +159,7 @@ class TrendChart(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if not self._stats:
             painter.setPen(QColor(palette.faint))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无趋势数据")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, t("暂无趋势数据"))
             return
         rect = self._plot_rect()
         incomes = [item.income for item in self._stats]
@@ -181,7 +182,7 @@ class TrendChart(QWidget):
             painter.drawText(
                 QRectF(0, y - 9, rect.left() - 10, 18),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                format_compact(value),
+                compact_amount(value),
             )
 
         count = len(self._stats)
@@ -242,7 +243,7 @@ class TrendChart(QWidget):
         legend_font.setPixelSize(12)
         painter.setFont(legend_font)
         legend_x = 56.0
-        for label, color in (("收入", palette.income), ("支出", palette.expense)):
+        for label, color in ((t("收入"), palette.income), (t("支出"), palette.expense)):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(color))
             painter.drawEllipse(QPointF(legend_x, 18), 4, 4)
@@ -297,13 +298,13 @@ class TrendChart(QWidget):
         painter.drawText(
             box.adjusted(12, 30, -12, 0),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-            f"收入  {format_compact(item.income)}",
+            f"{t('收入')}  {compact_amount(item.income)}",
         )
         painter.setPen(QColor(palette.expense))
         painter.drawText(
             box.adjusted(12, 48, -12, 0),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-            f"支出  {format_compact(item.expense)}",
+            f"{t('支出')}  {compact_amount(item.expense)}",
         )
 
 
@@ -360,7 +361,7 @@ class ValuationChart(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if not self._items:
             painter.setPen(QColor(palette.faint))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "还没有市值记录")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, t("还没有市值记录"))
             return
         plot, raw_max = self._geometry()
         top = max(1, _nice_ceiling(int(raw_max * 1.08)))
@@ -375,7 +376,7 @@ class ValuationChart(QWidget):
             painter.drawText(
                 QRectF(0, y - 9, plot.left() - 10, 18),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                format_compact(int(top * step / 4), self._symbol),
+                compact_amount(int(top * step / 4), self._symbol),
             )
 
         points: list[QPointF] = []
@@ -483,7 +484,7 @@ class CategoryBars(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if not self._items:
             painter.setPen(QColor(palette.faint))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无分类支出")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, t("暂无分类支出"))
             return
         maximum = max(item.amount for item in self._items) or 1
         label_font = QFont(self.font())
@@ -500,7 +501,7 @@ class CategoryBars(QWidget):
             painter.drawText(
                 QRectF(0, top + 4, self.width() - 140, 18),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                item.name,
+                category_display(item.name),
             )
             painter.setFont(value_font)
             painter.setPen(QColor(palette.text))

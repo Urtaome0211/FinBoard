@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -117,6 +117,56 @@ CREATE INDEX IF NOT EXISTS idx_valuations_account_date
     ON account_valuations(account_id, date);
 """
 
+SCHEMA_V5 = """
+ALTER TABLE transactions ADD COLUMN fee_waived INTEGER NOT NULL DEFAULT 0
+    CHECK (fee_waived IN (0,1));
+ALTER TABLE transactions ADD COLUMN fee_included INTEGER NOT NULL DEFAULT 0
+    CHECK (fee_included IN (0,1));
+"""
+
+SCHEMA_V6 = """
+ALTER TABLE accounts ADD COLUMN adjustment INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS recurring_transactions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT    NOT NULL,
+    kind           TEXT    NOT NULL CHECK (kind IN ('expense','income','transfer')),
+    amount         INTEGER NOT NULL CHECK (amount > 0),
+    currency       TEXT    NOT NULL DEFAULT 'CNY',
+    account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    category_id    INTEGER REFERENCES categories(id) ON DELETE RESTRICT,
+    to_account_id  INTEGER REFERENCES accounts(id) ON DELETE RESTRICT,
+    payee          TEXT    NOT NULL DEFAULT '',
+    note           TEXT    NOT NULL DEFAULT '',
+    fee_waived     INTEGER NOT NULL DEFAULT 0 CHECK (fee_waived IN (0,1)),
+    frequency      TEXT    NOT NULL CHECK (frequency IN ('daily','weekly','monthly','yearly')),
+    interval_count INTEGER NOT NULL DEFAULT 1 CHECK (interval_count BETWEEN 1 AND 365),
+    start_date     TEXT    NOT NULL,
+    end_date       TEXT,
+    next_date      TEXT    NOT NULL,
+    active         INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+    created_at     TEXT    NOT NULL,
+    updated_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_recurring_next
+    ON recurring_transactions(active, next_date);
+
+CREATE TABLE IF NOT EXISTS account_reconciliations (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id        INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    date              TEXT    NOT NULL,
+    statement_balance INTEGER NOT NULL,
+    ledger_balance    INTEGER NOT NULL,
+    difference        INTEGER NOT NULL,
+    note              TEXT    NOT NULL DEFAULT '',
+    created_at        TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_reconciliations_account
+    ON account_reconciliations(account_id, date);
+"""
+
 
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
@@ -166,6 +216,12 @@ class Database:
         if version < 4:
             conn.executescript(SCHEMA_V4)
             version = 4
+        if version < 5:
+            conn.executescript(SCHEMA_V5)
+            version = 5
+        if version < 6:
+            conn.executescript(SCHEMA_V6)
+            version = 6
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

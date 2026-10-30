@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+from ..i18n import is_english, month_name, weekday_name
+
 MONTHS_CN = (
     "一月",
     "二月",
@@ -78,11 +80,15 @@ def month_bounds(month: str) -> tuple[str, str]:
 
 def month_label(month: str) -> str:
     year, month_number = parse_month(month)
+    if is_english():
+        return f"{month_name(month_number)} {year}"
     return f"{year}年{month_number}月"
 
 
 def short_month_label(month: str) -> str:
     _, month_number = parse_month(month)
+    if is_english():
+        return month_name(month_number)
     return f"{month_number}月"
 
 
@@ -108,16 +114,22 @@ def month_choices(count: int = 18, end_month: str | None = None) -> list[str]:
 
 def day_label(value: str | date) -> str:
     day = value if isinstance(value, date) else parse_iso_day(value)
+    if is_english():
+        return f"{month_name(day.month)} {day.day}"
     return f"{day.month}月{day.day}日"
 
 
 def weekday_label(value: str | date) -> str:
     day = value if isinstance(value, date) else parse_iso_day(value)
+    if is_english():
+        return weekday_name(day.weekday())
     return WEEKDAYS_CN[day.weekday()]
 
 
 def full_date_label(value: str | date) -> str:
     day = value if isinstance(value, date) else parse_iso_day(value)
+    if is_english():
+        return f"{weekday_name(day.weekday())}, {month_name(day.month)} {day.day}, {day.year}"
     return f"{day.year}年{day.month}月{day.day}日 {WEEKDAYS_CN[day.weekday()]}"
 
 

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ...core.dates import month_label, month_of, today
 from ...core.models import CategorySpend, PayeeSpend
+from ...i18n import category_display, t
 from ..charts import CategoryBars, DonutChart, TrendChart
 from ..rows import ElidedLabel
 from ..theme import colors
@@ -41,8 +42,10 @@ class RankRow(QFrame):
         index.setProperty("role", "faint")
         index.setFixedWidth(24)
         row.addWidget(index)
-        row.addWidget(ElidedLabel(payee.payee or "未填写", size=13, weight=500), 1)
-        count = QLabel(f"{payee.count} 笔")
+        payee_label = ElidedLabel(payee.payee or t("未填写"), size=13, weight=500)
+        payee_label.setProperty("i18nSkip", True)
+        row.addWidget(payee_label, 1)
+        count = QLabel(t("{count} 笔", count=payee.count))
         count.setProperty("role", "muted")
         row.addWidget(count)
         amount = ValueLabel(service.format(payee.amount), size=13, weight=600)
@@ -139,21 +142,27 @@ class ReportsPage(Page):
 
     def refresh(self) -> None:
         month = self.month
-        self.header.set_subtitle(f"{month_label(month)} · 看懂资产负债结构与消费习惯")
+        self.header.set_subtitle(
+            f"{month_label(month)} · {t('看懂资产负债结构与消费习惯')}"
+        )
         stats = self.service.repo.month_stats(month)
         worth = self.service.repo.net_worth()
         money = self.service.format
 
-        self.income_card.set_value(money(stats.income), hint="工资、奖金等", tone="income")
-        self.expense_card.set_value(money(stats.expense), hint="不含转账", tone="expense")
+        self.income_card.set_value(
+            money(stats.income), hint=t("工资、奖金等"), tone="income"
+        )
+        self.expense_card.set_value(
+            money(stats.expense), hint=t("不含转账"), tone="expense"
+        )
         self.net_card.set_value(
             money(stats.net),
-            hint="收入 − 支出",
+            hint=t("收入 − 支出"),
             tone="income" if stats.net >= 0 else "expense",
         )
         self.rate_card.set_value(
             f"{stats.savings_rate:.1f}%",
-            hint="结余 / 收入",
+            hint=t("结余 / 收入"),
             tone="income" if stats.savings_rate >= 20 else ("warning" if stats.savings_rate > 0 else "expense"),
         )
 
@@ -167,14 +176,14 @@ class ReportsPage(Page):
     def _refresh_worth(self, worth, money) -> None:
         total = worth.assets + worth.liabilities
         segments = [
-            ("存款 / 资产", worth.assets, colors().primary),
-            ("负债", worth.liabilities, colors().expense),
+            (t("存款 / 资产"), worth.assets, colors().primary),
+            (t("负债"), worth.liabilities, colors().expense),
         ]
         self.worth_chart.set_data(
             segments,
-            center_title="净资产",
+            center_title=t("净资产"),
             center_value=money(worth.net),
-            empty_text="暂无资产或负债",
+            empty_text=t("暂无资产或负债"),
         )
         asset_pct = worth.assets / total * 100 if total else 0
         liability_pct = worth.liabilities / total * 100 if total else 0
@@ -185,30 +194,44 @@ class ReportsPage(Page):
         self, breakdown: list[CategorySpend], total: int, money
     ) -> None:
         if not breakdown:
-            self.expense_chart.set_data([], center_title="本月支出", center_value=money(0))
-            self.expense_note.setText("本月还没有支出记录")
+            self.expense_chart.set_data(
+                [], center_title=t("本月支出"), center_value=money(0)
+            )
+            self.expense_note.setText(t("本月还没有支出记录"))
             return
         top = breakdown[:6]
-        segments = [(item.name, item.amount, item.color) for item in top]
+        segments = [
+            (category_display(item.name), item.amount, item.color) for item in top
+        ]
         rest = sum(item.amount for item in breakdown[6:])
         if rest:
-            segments.append(("其他", rest, "#95A0B5"))
+            segments.append((t("其他"), rest, "#95A0B5"))
         self.expense_chart.set_data(
             segments,
-            center_title="本月支出",
+            center_title=t("本月支出"),
             center_value=money(total),
-            empty_text="暂无支出",
+            empty_text=t("暂无支出"),
         )
         top_name = breakdown[0]
         share = top_name.amount / total * 100 if total else 0
-        self.expense_note.setText(f"最大分类：{top_name.name} · {share:.0f}%")
+        self.expense_note.setText(
+            t(
+                "最大分类：{name} · {share}%",
+                name=category_display(top_name.name),
+                share=f"{share:.0f}",
+            )
+        )
 
     def _refresh_payees(self, month: str) -> None:
         clear_layout(self.payee_list)
         payees = self.service.repo.top_payees(month, limit=5)
         if not payees:
             self.payee_list.addWidget(
-                EmptyState("search", "还没有消费对象", "记账时填写“对方”，这里会自动汇总。")
+                EmptyState(
+                    "search",
+                    t("还没有消费对象"),
+                    t("记账时填写“对方”，这里会自动汇总。"),
+                )
             )
             return
         for index, payee in enumerate(payees, start=1):

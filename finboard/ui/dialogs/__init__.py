@@ -4,6 +4,8 @@ from .account_dialog import AccountDialog
 from .budget_dialog import BudgetDialog
 from .category_dialog import CategoryDialog
 from .category_manager import CategoryManagerDialog
+from .reconcile_dialog import ReconcileDialog
+from .recurring_dialog import RecurringDialog
 from .transaction_dialog import TransactionDialog
 from .valuation_dialog import ValuationDialog
 
@@ -12,6 +14,8 @@ __all__ = [
     "BudgetDialog",
     "CategoryDialog",
     "CategoryManagerDialog",
+    "ReconcileDialog",
+    "RecurringDialog",
     "TransactionDialog",
     "ValuationDialog",
 ]

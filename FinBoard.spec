@@ -5,12 +5,14 @@ from pathlib import Path
 
 ROOT = Path(SPECPATH)
 RESOURCES = ROOT / "finboard" / "resources"
+LOCALES = ROOT / "finboard" / "locales"
 
 datas = [
     (str(RESOURCES / "finboard.ico"), "finboard/resources"),
     (str(RESOURCES / "finboard.png"), "finboard/resources"),
     (str(RESOURCES / "chevron-down.svg"), "finboard/resources"),
     (str(RESOURCES / "check.svg"), "finboard/resources"),
+    (str(LOCALES / "en.json"), "finboard/locales"),
 ]
 
 a = Analysis(

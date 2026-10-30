@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 
 from ...core.models import Account
-from ..dialogs import ValuationDialog
+from ..dialogs import ReconcileDialog, ValuationDialog
 from ..rows import AccountRow
 from ..widgets import (
     Card,
@@ -131,10 +131,14 @@ class AccountsPage(Page):
             row.archive_requested.connect(self._toggle_archive)
             row.delete_requested.connect(self._delete)
             row.valuation_requested.connect(self._open_valuation)
+            row.reconcile_requested.connect(self._open_reconcile)
             layout.addWidget(row)
 
     def _open_valuation(self, account: Account) -> None:
         ValuationDialog(self.service, account, parent=self.window).exec()
+
+    def _open_reconcile(self, account: Account) -> None:
+        ReconcileDialog(self.service, account, parent=self.window).exec()
 
     def _toggle_archive(self, account: Account) -> None:
         if account.archived:

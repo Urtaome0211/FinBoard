@@ -71,6 +71,7 @@ class Account:
     last_valuation: int | None = None
     last_valuation_date: str = ""
     valuation_count: int = 0
+    adjustment: int = 0
 
     @property
     def type_label(self) -> str:
@@ -95,6 +96,47 @@ class AccountValuation:
     account_id: int
     date: str
     value: int
+    note: str = ""
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
+class RecurringTransaction:
+    id: int
+    name: str
+    kind: str
+    amount: int
+    account_id: int
+    account_name: str = ""
+    category_id: int | None = None
+    category_name: str = ""
+    to_account_id: int | None = None
+    to_account_name: str = ""
+    payee: str = ""
+    note: str = ""
+    fee_waived: bool = False
+    frequency: str = "monthly"
+    interval_count: int = 1
+    start_date: str = ""
+    end_date: str | None = None
+    next_date: str = ""
+    active: bool = True
+    currency: str = "CNY"
+    created_at: str = ""
+
+    @property
+    def title(self) -> str:
+        return self.name or self.payee or self.category_name
+
+
+@dataclass(frozen=True)
+class Reconciliation:
+    id: int
+    account_id: int
+    date: str
+    statement_balance: int
+    ledger_balance: int
+    difference: int
     note: str = ""
     created_at: str = ""
 
@@ -131,6 +173,8 @@ class Transaction:
     account_amount: int = 0
     to_amount: int = 0
     fee: int = 0
+    fee_waived: bool = False
+    fee_included: bool = False
     account_currency: str = "CNY"
     to_account_currency: str = "CNY"
 

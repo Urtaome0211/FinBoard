@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ...core.dates import month_label, month_of, today
+from ...i18n import category_display, t, today_label
 from ...core.models import BudgetLine
 from ...core.money import percentage
 from ..charts import DonutChart, TrendChart
@@ -124,22 +125,28 @@ class DashboardPage(Page):
         money = self.service.format
 
         self.header.set_subtitle(
-            f"{month_label(month)} · 今天 {today().month} 月 {today().day} 日"
+            f"{month_label(month)} · {today_label(today().month, today().day)}"
         )
         self.net_card.set_value(
             money(worth.net),
-            hint=f"资产 {money(worth.assets)} · 负债 {money(worth.liabilities)}",
+            hint=t(
+                "资产 {assets} · 负债 {liabilities}",
+                assets=money(worth.assets),
+                liabilities=money(worth.liabilities),
+            ),
             tone="expense" if worth.net < 0 else "text",
         )
         self.income_card.set_value(
-            "+" + money(stats.income), hint="工资、理财及其他收入", tone="income"
+            "+" + money(stats.income),
+            hint=t("工资、理财及其他收入"),
+            tone="income",
         )
         self.expense_card.set_value(
-            money(stats.expense), hint="本月所有支出", tone="expense"
+            money(stats.expense), hint=t("本月所有支出"), tone="expense"
         )
         self.balance_card.set_value(
             money(stats.net, plus=True),
-            hint=f"储蓄率 {stats.savings_rate:.1f}%",
+            hint=t("储蓄率 {rate}%", rate=f"{stats.savings_rate:.1f}"),
             tone="income" if stats.net >= 0 else "expense",
         )
 
@@ -147,14 +154,14 @@ class DashboardPage(Page):
         palette = colors()
         segments = []
         if worth.assets > 0:
-            segments.append(("存款 / 资产", worth.assets, palette.income))
+            segments.append((t("存款 / 资产"), worth.assets, palette.income))
         if worth.liabilities > 0:
-            segments.append(("负债", worth.liabilities, palette.expense))
+            segments.append((t("负债"), worth.liabilities, palette.expense))
         self.donut.set_data(
             segments,
-            center_title="净资产",
+            center_title=t("净资产"),
             center_value=money(worth.net),
-            empty_text="还没有账户数据",
+            empty_text=t("还没有账户数据"),
         )
         self.asset_legend.set_data(
             money(worth.assets), f"{percentage(worth.assets, total):.1f}%"
@@ -177,9 +184,9 @@ class DashboardPage(Page):
             self.recent_layout.addWidget(
                 EmptyState(
                     "list",
-                    "还没有记录",
-                    "点击“记一笔”，开始记录第一笔收支。",
-                    "记一笔",
+                    t("还没有记录"),
+                    t("点击“记一笔”，开始记录第一笔收支。"),
+                    t("记一笔"),
                     lambda: self.window.open_transaction(),
                 )
             )
@@ -198,9 +205,9 @@ class DashboardPage(Page):
             self.budget_layout.addWidget(
                 EmptyState(
                     "target",
-                    "还没有设置预算",
-                    "先给本月定一个支出上限，超支时会提醒你。",
-                    "设置预算",
+                    t("还没有设置预算"),
+                    t("先给本月定一个支出上限，超支时会提醒你。"),
+                    t("设置预算"),
                     lambda: self.window.navigate("budgets"),
                 )
             )
@@ -211,12 +218,9 @@ class DashboardPage(Page):
         amount = ValueLabel(self.service.format(overall.amount), tone="text", size=24, weight=700)
         self.budget_layout.addWidget(amount)
         meta = QLabel(
-            f"已用 {self.service.format(overall.spent)} · "
-            + (
-                f"超支 {self.service.format(-overall.remaining)}"
-                if overall.remaining < 0
-                else f"剩余 {self.service.format(overall.remaining)}"
-            )
+            t("已用 {used} · 超支 {amount}", used=self.service.format(overall.spent), amount=self.service.format(-overall.remaining))
+            if overall.remaining < 0
+            else t("已用 {used} · 剩余 {amount}", used=self.service.format(overall.spent), amount=self.service.format(overall.remaining))
         )
         meta.setProperty("role", "error" if overall.remaining < 0 else "muted")
         self.budget_layout.addWidget(meta)
@@ -225,8 +229,9 @@ class DashboardPage(Page):
         ratio = overall.ratio * 100 if overall.amount else 0
         set_progress(bar, ratio)
         status = QLabel(
-            f"已使用 {ratio:.0f}%"
-            + (" · 已超支" if ratio > 100 else "")
+            t("已使用 {ratio}% · 已超支", ratio=f"{ratio:.0f}")
+            if ratio > 100
+            else t("已使用 {ratio}%", ratio=f"{ratio:.0f}")
         )
         status.setProperty("role", "error" if ratio > 100 else "muted")
         self.budget_layout.addWidget(status)
@@ -247,7 +252,7 @@ class DashboardPage(Page):
         dot = QLabel("●")
         dot.setStyleSheet(f"color: {line.color or colors().muted}; font-size: 10px;")
         top.addWidget(dot)
-        name = QLabel(line.name)
+        name = QLabel(category_display(line.name))
         name.setProperty("role", "muted")
         top.addWidget(name)
         top.addStretch(1)

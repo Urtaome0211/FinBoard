@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QDate, Qt, QTimer
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QDialog,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.fees import withdrawal_rule
+from ...i18n import currency_display, t
 from ...core.models import Transaction
 from ...core.money import CURRENCIES, parse_amount
 from ...core.rates import RateError
@@ -42,23 +44,32 @@ class TransactionDialog(QDialog):
         super().__init__(parent)
         self.service = service
         self.transaction = transaction
-        self.setWindowTitle("编辑记录" if transaction else "记一笔")
+        self.setWindowTitle(t("编辑记录") if transaction else t("记一笔"))
         self.setModal(True)
         self.setMinimumWidth(570)
         self.setSizeGripEnabled(False)
 
         kind = transaction.kind if transaction else default_kind
         layout = root_layout(self)
+        layout.setContentsMargins(24, 20, 24, 18)
+        layout.setSpacing(12)
 
         header, _ = dialog_header(
-            "编辑记录" if transaction else "记一笔",
-            "修改后账户余额会同步更新" if transaction else "记录一笔收入、支出或账户间转账",
+            t("编辑记录") if transaction else t("记一笔"),
+            t("修改后账户余额会同步更新")
+            if transaction
+            else t("记录一笔收入、支出或账户间转账"),
             "edit" if transaction else "plus",
         )
         layout.addLayout(header)
 
         self.kind_control = SegmentedControl(
-            [("支出", "expense"), ("收入", "income"), ("转账", "transfer")], kind
+            [
+                (t("支出"), "expense"),
+                (t("收入"), "income"),
+                (t("转账"), "transfer"),
+            ],
+            kind,
         )
         self.kind_control.setMaximumWidth(330)
         self.kind_control.changed.connect(self._kind_changed)
@@ -76,9 +87,11 @@ class TransactionDialog(QDialog):
         self.amount_input.setMaxLength(20)
         self.amount_input.setClearButtonEnabled(True)
         self.currency_combo = QComboBox()
-        self.currency_combo.setFixedWidth(118)
+        self.currency_combo.setFixedWidth(190)
         for code, meta in CURRENCIES.items():
-            self.currency_combo.addItem(f"{code} · {meta['name']}", code)
+            self.currency_combo.addItem(
+                currency_display(code, meta["symbol"], meta["name"]), code
+            )
         amount_row.addWidget(self.amount_symbol, 0, Qt.AlignmentFlag.AlignVCenter)
         amount_row.addWidget(self.amount_input, 1)
         amount_row.addWidget(self.currency_combo, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -99,27 +112,29 @@ class TransactionDialog(QDialog):
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.date_edit.setDate(QDate.currentDate())
-        self.form.addRow(form_label("日期"), self.date_edit)
+        self.form.addRow(form_label(t("日期")), self.date_edit)
 
         self.account_combo = QComboBox()
         self.account_combo.setMinimumWidth(240)
-        self.form.addRow(form_label("账户"), self.account_combo)
+        self.account_combo.setProperty("i18nSkip", True)
+        self.form.addRow(form_label(t("来源账户")), self.account_combo)
 
-        self.category_label = form_label("分类")
+        self.category_label = form_label(t("分类"))
         self.category_combo = QComboBox()
         self.form.addRow(self.category_label, self.category_combo)
 
-        self.to_label = form_label("转入账户")
+        self.to_label = form_label(t("转入账户"))
         self.to_combo = QComboBox()
+        self.to_combo.setProperty("i18nSkip", True)
         self.form.addRow(self.to_label, self.to_combo)
 
-        self.to_amount_label = form_label("到账金额")
+        self.to_amount_label = form_label(t("到账金额"))
         self.to_amount_input = QLineEdit()
-        self.to_amount_input.setPlaceholderText("留空则按当日汇率自动折算")
+        self.to_amount_input.setPlaceholderText(t("留空则按当日汇率自动折算"))
         self.to_amount_input.setMaxLength(20)
         self.form.addRow(self.to_amount_label, self.to_amount_input)
 
-        self.fee_label = form_label("手续费")
+        self.fee_label = form_label(t("手续费"))
         self.fee_value = QLabel("—")
         self.fee_value.setProperty("role", "muted")
         self.fee_value.setWordWrap(True)
@@ -127,15 +142,21 @@ class TransactionDialog(QDialog):
         self.fee_label.hide()
         self.fee_value.hide()
 
+        self.waive_check = QCheckBox(t("本次豁免手续费"))
+        self.waive_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.waive_check.toggled.connect(lambda _checked: self._update_preview())
+        self.form.addRow("", self.waive_check)
+        self.waive_check.hide()
+
         self.payee_input = QLineEdit()
-        self.payee_input.setPlaceholderText("例如：盒马鲜生、房东、公司")
+        self.payee_input.setPlaceholderText(t("例如：盒马鲜生、房东、公司"))
         self.payee_input.setMaxLength(60)
-        self.form.addRow(form_label("对方"), self.payee_input)
+        self.form.addRow(form_label(t("对方")), self.payee_input)
 
         self.note_input = QLineEdit()
-        self.note_input.setPlaceholderText("可选备注，例如：周末聚餐")
+        self.note_input.setPlaceholderText(t("可选备注，例如：周末聚餐"))
         self.note_input.setMaxLength(200)
-        self.form.addRow(form_label("备注"), self.note_input)
+        self.form.addRow(form_label(t("备注")), self.note_input)
         layout.addLayout(self.form)
 
         self.preview = QLabel()
@@ -144,8 +165,10 @@ class TransactionDialog(QDialog):
         layout.addWidget(self.preview)
 
         self.hint = QLabel(
-            "转账不计入收支统计，只调整两个账户的余额。"
-            "支付宝/微信钱包提现会按规则自动扣手续费，并计入支出。"
+            t(
+                "转账不计入收支统计，只调整两个账户的余额。"
+                "支付宝/微信钱包提现会按规则自动扣手续费，并计入支出。"
+            )
         )
         self.hint.setProperty("role", "faint")
         self.hint.setWordWrap(True)
@@ -154,7 +177,9 @@ class TransactionDialog(QDialog):
         self.error = error_label()
         layout.addWidget(self.error)
         footer = dialog_footer(
-            self, self.error, save_text="保存记录" if transaction else "记一笔"
+            self,
+            self.error,
+            save_text=t("保存记录") if transaction else t("记一笔"),
         )
         self.save_button = footer.itemAt(footer.count() - 1).widget()
         self.save_button.clicked.connect(self._save)
@@ -250,7 +275,7 @@ class TransactionDialog(QDialog):
         if target_id:
             target = self.service.repo.get_account(target_id, include_archived=True)
             self.to_amount_input.setPlaceholderText(
-                f"留空自动折算为 {target.currency}"
+                t("留空自动折算为 {currency}", currency=target.currency)
             )
         self._update_preview()
 
@@ -285,20 +310,22 @@ class TransactionDialog(QDialog):
             )
         self.payee_input.setText(transaction.payee)
         self.note_input.setText(transaction.note)
+        self.waive_check.setChecked(transaction.fee_waived)
         self.kind_control.set_value(transaction.kind, emit=False)
+        self._update_preview()
 
     # ------------------------------------------------------------------
     def _update_preview(self, *_args) -> None:
         text = self.amount_input.text().strip()
         if not text:
             self._hide_fee()
-            self._set_preview("输入金额后显示折算结果", "faint")
+            self._set_preview(t("输入金额后显示折算结果"), "faint")
             return
         try:
             amount = parse_amount(text)
         except ValueError:
             self._hide_fee()
-            self._set_preview("金额格式有误", "error")
+            self._set_preview(t("金额格式有误"), "error")
             return
         currency = self.currency_combo.currentData() or "CNY"
         day = self.date_edit.date().toString("yyyy-MM-dd")
@@ -309,62 +336,131 @@ class TransactionDialog(QDialog):
             )
             base = self.service.to_base(amount, currency, day)
             if currency != self.service.currency:
-                parts.append(f"约 {self.service.format(base)}")
+                parts.append(t("约 {amount}", amount=self.service.format(base)))
             posted = amount
             if account.currency != currency:
                 posted = self.service.rate_store.convert(
                     amount, currency, account.currency, day
                 )
                 parts.append(
-                    f"账户入账 {self.service.format_money(posted, account.currency)}"
+                    t(
+                        "账户入账 {amount}",
+                        amount=self.service.format_money(posted, account.currency),
+                    )
                 )
             if self.kind_control.value() == "transfer":
                 target_id = self.to_combo.currentData()
+                target = None
                 if target_id:
                     target = self.service.repo.get_account(
                         target_id, include_archived=True
                     )
-                    if self.to_amount_input.text().strip():
+
+                rule = withdrawal_rule(account.name, account.currency)
+                waived = self.waive_check.isChecked()
+                fee = 0
+                full = False
+                self.to_amount_input.setEnabled(True)
+                if rule:
+                    fee = (
+                        0
+                        if waived
+                        else self.service.repo.withdrawal_fee(account.id, posted)
+                    )
+                    exclude_id = self.transaction.id if self.transaction else None
+                    available = self.service.available_balance(
+                        account.id, exclude_id
+                    )
+                    full = bool(
+                        not waived and fee and posted == available and posted > fee
+                    )
+
+                received = None
+                if target is not None:
+                    if full:
+                        received = self.service.rate_store.convert(
+                            posted - fee, account.currency, target.currency, day
+                        )
+                        parts.append(
+                            t(
+                                "预计转入 {amount}",
+                                amount=self.service.format_money(
+                                    received, target.currency
+                                ),
+                            )
+                        )
+                    elif self.to_amount_input.text().strip():
                         received = parse_amount(self.to_amount_input.text())
                         parts.append(
-                            f"转入 {self.service.format_money(received, target.currency)}"
+                            t(
+                                "转入 {amount}",
+                                amount=self.service.format_money(
+                                    received, target.currency
+                                ),
+                            )
                         )
                     else:
                         received = self.service.rate_store.convert(
                             amount, currency, target.currency, day
                         )
                         parts.append(
-                            f"预计转入 "
-                            f"{self.service.format_money(received, target.currency)}"
+                            t(
+                                "预计转入 {amount}",
+                                amount=self.service.format_money(
+                                    received, target.currency
+                                ),
+                            )
                         )
-                rule = withdrawal_rule(account.name, account.currency)
+                    self.to_amount_input.setEnabled(not full)
+
                 if rule:
-                    fee = self.service.repo.withdrawal_fee(account.id, posted)
                     self.fee_label.show()
                     self.fee_value.show()
-                    self.fee_value.setText(
-                        f"{self.service.format_money(fee, account.currency)}"
-                        f"（{rule.label}，最低 "
-                        f"{self.service.format_money(rule.minimum_fee, 'CNY')}）"
-                    )
+                    self.waive_check.show()
+                    if waived:
+                        self.fee_value.setText(
+                            f"{self.service.format_money(0, account.currency)}"
+                            f"（{t('已豁免')}）"
+                        )
+                    elif full:
+                        self.fee_value.setText(
+                            f"{self.service.format_money(fee, account.currency)}"
+                            f"（{t('包含在提现金额中')}）"
+                        )
+                    else:
+                        self.fee_value.setText(
+                            f"{self.service.format_money(fee, account.currency)}"
+                            f" ({t(rule.label)}, "
+                            f"{t('最低 {amount}', amount=self.service.format_money(rule.minimum_fee, 'CNY'))})"
+                        )
+                    actual = posted if (waived or full) else posted + fee
                     parts.append(
-                        f"实际扣款 {self.service.format_money(posted + fee, account.currency)}"
+                        t(
+                            "实际扣款 {amount}",
+                            amount=self.service.format_money(
+                                actual, account.currency
+                            ),
+                        )
                     )
                 else:
                     self._hide_fee()
+                    self.to_amount_input.setEnabled(True)
         except RateError as exc:
             self._hide_fee()
-            self._set_preview(f"汇率不可用：{exc}", "error")
+            self._set_preview(
+                t("汇率不可用：{error}", error=str(exc)), "error"
+            )
             return
         except ValueError as exc:
             self._hide_fee()
             self._set_preview(str(exc), "error")
             return
-        self._set_preview(" · ".join(parts) or "无需折算", "faint")
+        self._set_preview(" · ".join(parts) or t("无需折算"), "faint")
 
     def _hide_fee(self) -> None:
         self.fee_label.hide()
         self.fee_value.hide()
+        self.waive_check.hide()
 
     def _set_preview(self, text: str, role: str) -> None:
         self.preview.setText(text)
@@ -401,7 +497,7 @@ class TransactionDialog(QDialog):
             return
         account_id = self.account_combo.currentData()
         if not account_id:
-            show_error(self.error, "请先选择一个账户")
+            show_error(self.error, t("请先选择一个账户"))
             return
         category_id = None
         to_account_id = None
@@ -409,22 +505,22 @@ class TransactionDialog(QDialog):
         if kind == "transfer":
             to_account_id = self.to_combo.currentData()
             if not to_account_id:
-                show_error(self.error, "请选择转入账户")
+                show_error(self.error, t("请选择转入账户"))
                 return
             if to_account_id == account_id:
-                show_error(self.error, "转出账户和转入账户不能相同")
+                show_error(self.error, t("转出账户和转入账户不能相同"))
                 return
             if self.to_amount_input.text().strip():
                 try:
                     to_amount = parse_amount(self.to_amount_input.text())
                 except ValueError as exc:
-                    show_error(self.error, f"到账金额：{exc}")
+                    show_error(self.error, t("到账金额：{error}", error=str(exc)))
                     self.to_amount_input.setFocus()
                     return
         else:
             category_id = self.category_combo.currentData()
             if not category_id:
-                show_error(self.error, "请先在“分类”页添加一个分类")
+                show_error(self.error, t("请先在“分类”页添加一个分类"))
                 return
         fields = dict(
             date=self.date_edit.date().toString("yyyy-MM-dd"),
@@ -432,6 +528,7 @@ class TransactionDialog(QDialog):
             amount=amount,
             currency=self.currency_combo.currentData() or "CNY",
             to_amount=to_amount,
+            fee_waived=bool(self.waive_check.isChecked()),
             category_id=category_id,
             account_id=account_id,
             to_account_id=to_account_id,

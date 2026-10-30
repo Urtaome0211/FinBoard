@@ -60,6 +60,50 @@ class WithdrawalFeeTests(unittest.TestCase):
         self.assertEqual(self.repo.get_account(self.wechat).balance, 199_899)
         self.assertEqual(self.repo.get_account(self.bank).balance, 100)
 
+    def test_full_withdrawal_includes_fee_in_the_withdrawal(self) -> None:
+        txn_id = self._transfer(self.alipay, 200_000)
+        txn = self.repo.get_transaction(txn_id)
+        self.assertEqual(txn.fee, 200)
+        self.assertTrue(txn.fee_included)
+        self.assertEqual(txn.to_amount, 199_800)
+        self.assertEqual(self.repo.get_account(self.alipay).balance, 0)
+        self.assertEqual(self.repo.get_account(self.bank).balance, 199_800)
+        balance = self.repo.transaction_balances([txn_id])[txn_id]
+        self.assertEqual(balance.account_balance, 0)
+        self.assertEqual(balance.to_account_balance, 199_800)
+
+    def test_partial_withdrawal_keeps_fee_separate(self) -> None:
+        txn_id = self._transfer(self.alipay, 50_000)
+        txn = self.repo.get_transaction(txn_id)
+        self.assertFalse(txn.fee_included)
+        self.assertEqual(txn.fee, 50)
+        self.assertEqual(txn.to_amount, 50_000)
+        self.assertEqual(self.repo.get_account(self.alipay).balance, 149_950)
+        self.assertEqual(self.repo.get_account(self.bank).balance, 50_000)
+
+    def test_fee_can_be_waived(self) -> None:
+        txn_id = self.repo.add_transaction(
+            date="2026-10-29",
+            kind="transfer",
+            amount=200_000,
+            account_id=self.alipay,
+            to_account_id=self.bank,
+            fee_waived=True,
+        )
+        txn = self.repo.get_transaction(txn_id)
+        self.assertTrue(txn.fee_waived)
+        self.assertEqual(txn.fee, 0)
+        self.assertFalse(txn.fee_included)
+        self.assertEqual(txn.to_amount, 200_000)
+        self.assertEqual(self.repo.get_account(self.alipay).balance, 0)
+        self.assertEqual(self.repo.get_account(self.bank).balance, 200_000)
+
+    def test_partial_withdrawal_cannot_overdraw_the_fee(self) -> None:
+        with self.assertRaisesRegex(ValueError, "不足以支付手续费"):
+            self._transfer(self.alipay, 199_990)
+        self.assertEqual(self.repo.get_account(self.alipay).balance, 200_000)
+        self.assertEqual(self.repo.get_account(self.bank).balance, 0)
+
     def test_alipay_minimum_is_ten_cents(self) -> None:
         txn_id = self._transfer(self.alipay, 100)
         txn = self.repo.get_transaction(txn_id)

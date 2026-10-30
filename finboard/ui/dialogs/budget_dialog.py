@@ -8,6 +8,7 @@ from ...core.dates import month_label
 from ...core.models import BudgetLine
 from ...core.money import format_cents, parse_amount
 from ...core.service import FinanceService
+from ...i18n import t
 from ..icons import icon
 from ..theme import colors
 from .common import (
@@ -42,7 +43,7 @@ class BudgetDialog(QDialog):
         layout = root_layout(self)
         header, _ = dialog_header(
             "编辑预算" if line else "设置预算",
-            f"{month_label(month)} · 预算用于跟踪当月支出",
+            f"{month_label(month)} · {t('预算用于跟踪当月支出')}",
             "edit" if line else "target",
         )
         layout.addLayout(header)

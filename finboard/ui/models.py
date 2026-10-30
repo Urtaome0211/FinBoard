@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
 from PySide6.QtWidgets import QStyledItemDelegate, QStyle, QStyleOptionViewItem
 
 from ..core.models import KIND_LABELS, Transaction, TransactionBalance
+from ..i18n import category_display, t
 from ..core.service import FinanceService
 from .theme import colors
 
@@ -30,7 +31,7 @@ class TransactionTableModel(QAbstractTableModel):
 
     def headerData(self, section: int, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return _HEADERS[section]
+            return t(_HEADERS[section])
         return None
 
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
@@ -44,11 +45,11 @@ class TransactionTableModel(QAbstractTableModel):
             if column == 0:
                 return txn.date
             if column == 1:
-                return KIND_LABELS.get(txn.kind, txn.kind)
+                return t(KIND_LABELS.get(txn.kind, txn.kind))
             if column == 2:
-                return txn.title
+                return t(txn.title)
             if column == 3:
-                return txn.category_name or "—"
+                return category_display(txn.category_name) if txn.category_name else "—"
             if column == 4:
                 return txn.account_display
             if column == 5:
@@ -132,11 +133,13 @@ class TransactionTableModel(QAbstractTableModel):
                 detail += (
                     f"\n到账 {self.service.format_money(txn.to_amount, txn.to_account_currency)}"
                 )
-            if txn.fee:
+            if txn.kind == "transfer" and txn.fee:
                 detail += (
                     f"\n手续费 {self.service.format_money(txn.fee, txn.account_currency)}"
-                    "（从转出账户扣除）"
+                    + ("（包含在提现金额中）" if txn.fee_included else "（从转出账户扣除）")
                 )
+            elif txn.kind == "transfer" and txn.fee_waived:
+                detail += "\n手续费 已豁免"
             balance = self._balances.get(txn.id)
             if balance is not None:
                 detail += (
@@ -206,18 +209,19 @@ class KindBadgeDelegate(QStyledItemDelegate):
         fg_key, bg_key = self._TONES.get(kind, ("muted", "surface_alt"))
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
         rect = option.rect
+        font = painter.font()
+        font.setPixelSize(11)
+        font.setWeight(QFont.Weight.DemiBold)
+        width = max(50.0, QFontMetrics(font).horizontalAdvance(text) + 20.0)
         pill = QRectF(
-            rect.center().x() - 25,
+            rect.center().x() - width / 2,
             rect.center().y() - 11,
-            50,
+            width,
             22,
         )
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(getattr(palette, bg_key)))
         painter.drawRoundedRect(pill, 6, 6)
-        font = painter.font()
-        font.setPixelSize(11)
-        font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         painter.setPen(QColor(getattr(palette, fg_key)))
         painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)

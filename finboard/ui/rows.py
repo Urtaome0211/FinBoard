@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from ..core.models import Account, Transaction
 from ..core.service import FinanceService
+from ..i18n import account_type_display, category_display, t
 from .theme import colors, theme_store
 from .widgets import Badge, IconButton, ValueLabel, icon_label
 
@@ -111,15 +112,20 @@ class TransactionRow(QFrame):
         text_column.setSpacing(2)
         text_column.setContentsMargins(0, 0, 0, 0)
         title = ElidedLabel(transaction.title, size=13, weight=600)
+        title.setProperty("i18nSkip", True)
         subtitle_text = (
-            f"{transaction.category_name} · {transaction.account_display}"
+            f"{category_display(transaction.category_name)} · {transaction.account_display}"
             if transaction.kind != "transfer"
-            else f"转账 · {transaction.account_display}"
+            else f"{t('转账')} · {transaction.account_display}"
         )
         if transaction.fee:
             subtitle_text += (
-                f" · 手续费 {service.format_money(transaction.fee, transaction.account_currency)}"
+                f" · {t('手续费')} {service.format_money(transaction.fee, transaction.account_currency)}"
             )
+            if transaction.fee_included:
+                subtitle_text += f"（{t('包含在提现金额中')}）"
+        elif transaction.kind == "transfer" and transaction.fee_waived:
+            subtitle_text += f" · {t('手续费已豁免')}"
         if transaction.currency != service.currency:
             subtitle_text += f" · {transaction.currency}"
         subtitle = ElidedLabel(
@@ -143,10 +149,15 @@ class TransactionRow(QFrame):
         amount_label.setMinimumWidth(96)
         row.addWidget(amount_label)
         if transaction.fee:
+            included = (
+                f"（{t('包含在提现金额中')}）" if transaction.fee_included else ""
+            )
             self.setToolTip(
-                f"手续费 {service.format_money(transaction.fee, transaction.account_currency)}"
+                f"手续费 {service.format_money(transaction.fee, transaction.account_currency)}{included}"
                 f"\n从「{transaction.account_name}」转出时自动扣除"
             )
+        elif transaction.kind == "transfer" and transaction.fee_waived:
+            self.setToolTip(t("手续费已豁免"))
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
@@ -159,6 +170,7 @@ class AccountRow(QFrame):
     archive_requested = Signal(object)
     delete_requested = Signal(object)
     valuation_requested = Signal(object)
+    reconcile_requested = Signal(object)
 
     def __init__(
         self, account: Account, service: FinanceService, parent: QWidget | None = None
@@ -184,24 +196,29 @@ class AccountRow(QFrame):
         name_row = QHBoxLayout()
         name_row.setSpacing(7)
         name_label = ElidedLabel(account.name, size=13, weight=600)
+        name_label.setProperty("i18nSkip", True)
         name_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        name_label.setMinimumWidth(40)
+        name_label.setMinimumWidth(60)
         name_row.addWidget(name_label)
-        name_row.addWidget(Badge(account.type_label, "danger" if is_liability else "primary"))
+        name_row.addWidget(Badge(account_type_display(account.type_label), "danger" if is_liability else "primary"))
         if account.archived:
-            name_row.addWidget(Badge("已归档", "neutral"))
+            name_row.addWidget(Badge(t("已归档"), "neutral"))
         name_row.addStretch(1)
         column.addLayout(name_row)
-        note = account.note or ("负债账户" if is_liability else "资产账户")
+        note = account.note or t("负债账户" if is_liability else "资产账户")
         if account.type == "investment":
-            note = account.note or "投资账户"
+            note = account.note or t("投资账户")
             if account.last_valuation_date:
-                note = f"{note} · 市值 {account.last_valuation_date}"
+                note = f"{note} · {t('市值')} {account.last_valuation_date}"
             else:
-                note = f"{note} · 尚未记录市值"
+                note = f"{note} · {t('尚未记录市值')}"
         if account.currency != "CNY":
             note = f"{account.currency} · {note}"
-        column.addWidget(ElidedLabel(note, role="muted", size=11, weight=400))
+        if account.adjustment:
+            note += f" · {t('对账调整')} {service.format_money(account.adjustment, account.currency)}"
+        note_label = ElidedLabel(note, role="muted", size=11, weight=400)
+        note_label.setProperty("i18nSkip", True)
+        column.addWidget(note_label)
         row.addLayout(column, 1)
 
         display_balance = -abs(account.balance) if is_liability and account.balance > 0 else account.balance
@@ -212,27 +229,31 @@ class AccountRow(QFrame):
             weight=600,
         )
         if is_liability and account.balance > 0:
-            balance.setToolTip("负债账户按欠款显示；打开账户并保存可修正符号")
+            balance.setToolTip(t("负债账户按欠款显示；打开账户并保存可修正符号"))
         balance.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         balance.setMinimumWidth(116)
         row.addWidget(balance)
 
         actions = QHBoxLayout()
         actions.setSpacing(0)
-        valuation = IconButton("chart", "记录每日市值", size=16)
+        valuation = IconButton("chart", t("记录每日市值"), size=16)
         valuation.setFixedSize(30, 30)
         valuation.setVisible(account.type == "investment" and not account.archived)
-        edit = IconButton("edit", "编辑账户", size=16)
+        reconcile = IconButton("check", t("对账校准余额"), size=16)
+        reconcile.setFixedSize(30, 30)
+        reconcile.setVisible(account.type != "investment" and not account.archived)
+        edit = IconButton("edit", t("编辑账户"), size=16)
         archive = IconButton(
             "refresh" if account.archived else "archive",
-            "恢复账户" if account.archived else "归档账户",
+            t("恢复账户") if account.archived else t("归档账户"),
             size=16,
         )
-        delete = IconButton("trash", "删除账户", size=16)
-        for button in (valuation, edit, archive, delete):
+        delete = IconButton("trash", t("删除账户"), size=16)
+        for button in (valuation, reconcile, edit, archive, delete):
             button.setFixedSize(30, 30)
             actions.addWidget(button)
         valuation.clicked.connect(lambda: self.valuation_requested.emit(account))
+        reconcile.clicked.connect(lambda: self.reconcile_requested.emit(account))
         edit.clicked.connect(lambda: self.edit_requested.emit(account))
         archive.clicked.connect(lambda: self.archive_requested.emit(account))
         delete.clicked.connect(lambda: self.delete_requested.emit(account))

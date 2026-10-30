@@ -24,6 +24,7 @@ from ...core.money import (
     percentage,
 )
 from ...core.service import FinanceService
+from ...i18n import t
 from ..charts import ValuationChart
 from ..theme import colors
 from ..widgets import (
@@ -99,7 +100,7 @@ class ValuationDialog(QDialog):
         layout.setSpacing(12)
         header, _ = dialog_header(
             "市值记录",
-            f"{account.name} · {account.currency} · 记录每日收盘市值",
+            f"{account.name} · {account.currency} · {t('记录每日收盘市值')}",
             "chart",
         )
         layout.addLayout(header)

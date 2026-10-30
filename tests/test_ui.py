@@ -17,7 +17,10 @@ from finboard.core.dates import today  # noqa: E402
 from finboard.core.rates import RateSnapshot, RateStore  # noqa: E402
 from finboard.core.repository import Repository  # noqa: E402
 from finboard.core.service import FinanceService  # noqa: E402
+from finboard.i18n import set_language  # noqa: E402
 from finboard.ui.dialogs.account_dialog import AccountDialog  # noqa: E402
+from finboard.ui.dialogs.reconcile_dialog import ReconcileDialog  # noqa: E402
+from finboard.ui.dialogs.recurring_dialog import RecurringDialog  # noqa: E402
 from finboard.ui.dialogs.transaction_dialog import TransactionDialog  # noqa: E402
 from finboard.ui.dialogs.valuation_dialog import ValuationDialog  # noqa: E402
 from finboard.ui.main_window import MainWindow  # noqa: E402
@@ -31,6 +34,7 @@ class AccountDialogTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
+        set_language("zh")
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Database(Path(self.tmp.name) / "test.db")
         self.repo = Repository(self.db)
@@ -135,6 +139,7 @@ class TransactionDialogTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
+        set_language("zh")
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Database(Path(self.tmp.name) / "test.db")
         self.repo = Repository(self.db)
@@ -168,6 +173,52 @@ class TransactionDialogTests(unittest.TestCase):
             dialog.deleteLater()
 
 
+    def test_full_withdrawal_dialog_includes_fee_and_waiver(self) -> None:
+        alipay = self.repo.add_account("支付宝钱包", "cash", 500_000)
+        bank = self.repo.add_account("银行储蓄卡", "debit", 0)
+        dialog = TransactionDialog(self.service)
+        try:
+            dialog.kind_control.set_value("transfer", emit=True)
+            dialog.account_combo.setCurrentIndex(
+                dialog.account_combo.findData(alipay)
+            )
+            dialog.amount_input.setText("5000.00")
+            dialog.to_combo.setCurrentIndex(dialog.to_combo.findData(bank))
+            self.assertIn("包含在提现金额中", dialog.fee_value.text())
+            self.assertFalse(dialog.to_amount_input.isEnabled())
+            dialog._save()
+
+            transaction = self.repo.transactions()[0]
+            self.assertTrue(transaction.fee_included)
+            self.assertEqual(transaction.fee, 500)
+            self.assertEqual(transaction.to_amount, 499_500)
+            self.assertEqual(self.repo.account_balance(alipay), 0)
+            self.assertEqual(self.repo.account_balance(bank), 499_500)
+        finally:
+            dialog.deleteLater()
+
+        alipay2 = self.repo.add_account("支付宝", "cash", 100_000)
+        bank2 = self.repo.add_account("银行储蓄卡2", "debit", 0)
+        dialog = TransactionDialog(self.service)
+        try:
+            dialog.kind_control.set_value("transfer", emit=True)
+            dialog.account_combo.setCurrentIndex(
+                dialog.account_combo.findData(alipay2)
+            )
+            dialog.amount_input.setText("100.00")
+            dialog.to_combo.setCurrentIndex(dialog.to_combo.findData(bank2))
+            dialog.waive_check.setChecked(True)
+            self.assertIn("已豁免", dialog.fee_value.text())
+            dialog._save()
+
+            transaction = self.repo.transactions()[0]
+            self.assertTrue(transaction.fee_waived)
+            self.assertEqual(transaction.fee, 0)
+            self.assertEqual(self.repo.account_balance(alipay2), 90_000)
+        finally:
+            dialog.deleteLater()
+
+
 class ValuationDialogTests(unittest.TestCase):
     app: QApplication
 
@@ -176,6 +227,7 @@ class ValuationDialogTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
+        set_language("zh")
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Database(Path(self.tmp.name) / "test.db")
         self.repo = Repository(self.db)
@@ -242,3 +294,61 @@ class RateStartupTests(unittest.TestCase):
                 db.close()
         finally:
             RateStore.fetch_latest = original
+
+
+class RecurringAndReconcileDialogTests(unittest.TestCase):
+    app: QApplication
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        set_language("zh")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.tmp.name) / "test.db")
+        self.repo = Repository(self.db)
+        self.service = FinanceService(self.repo)
+        self.bank = self.repo.add_account("招商银行储蓄卡", "debit", 100_000)
+
+    def tearDown(self) -> None:
+        self.db.close()
+        self.tmp.cleanup()
+
+    def test_recurring_dialog_saves_rule(self) -> None:
+        category = self.repo.categories("expense")[0]
+        dialog = RecurringDialog(self.service)
+        try:
+            dialog.name_input.setText("房租")
+            dialog.amount_input.setText("4200.00")
+            dialog.account_combo.setCurrentIndex(
+                dialog.account_combo.findData(self.bank)
+            )
+            dialog.category_combo.setCurrentIndex(
+                dialog.category_combo.findData(category.id)
+            )
+            dialog.frequency_combo.setCurrentIndex(
+                dialog.frequency_combo.findData("monthly")
+            )
+            dialog._save()
+            self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+            rule = self.repo.recurring_rules()[0]
+            self.assertEqual(rule.name, "房租")
+            self.assertEqual(rule.amount, 420_000)
+            self.assertEqual(rule.frequency, "monthly")
+        finally:
+            dialog.deleteLater()
+
+    def test_reconcile_dialog_saves_adjustment(self) -> None:
+        dialog = ReconcileDialog(self.service, self.repo.get_account(self.bank))
+        try:
+            dialog.statement_input.setText("1250.00")
+            self.assertIn("¥250.00", dialog.difference.text())
+            dialog._save()
+            self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+            account = self.repo.get_account(self.bank)
+            self.assertEqual(account.adjustment, 25_000)
+            self.assertEqual(account.balance, 125_000)
+            self.assertEqual(len(self.repo.reconciliations(self.bank)), 1)
+        finally:
+            dialog.deleteLater()

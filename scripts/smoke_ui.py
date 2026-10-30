@@ -39,7 +39,7 @@ def main() -> None:
     suffix = "" if args.theme == "light" else "-dark"
     out_dir = Path("build") / f"pages{suffix}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    for key in ("dashboard", "transactions", "accounts", "budgets", "reports", "settings"):
+    for key in ("dashboard", "transactions", "accounts", "budgets", "recurring", "reports", "settings"):
         window.navigate(key)
         app.processEvents()
         app.processEvents()

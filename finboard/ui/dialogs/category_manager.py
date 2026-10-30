@@ -80,7 +80,7 @@ class CategoryManagerDialog(QDialog):
         self.tabs = SegmentedControl(
             [("支出分类", "expense"), ("收入分类", "income")], "expense"
         )
-        self.tabs.setMaximumWidth(280)
+        self.tabs.setMaximumWidth(380)
         self.tabs.changed.connect(lambda _value: self._reload())
         layout.addWidget(self.tabs)
 

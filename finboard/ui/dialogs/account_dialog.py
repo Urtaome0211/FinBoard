@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QComboBox, QDialog, QFormLayout, QLabel, QLineEdit
 from ...core.models import ACCOUNT_TYPE_META, ACCOUNT_TYPES, Account
 from ...core.money import CURRENCIES, parse_signed_amount
 from ...core.service import FinanceService
+from ...i18n import account_type_display, currency_display, t
 from ..icons import icon
 from ..theme import colors
 from .common import (
@@ -52,7 +53,7 @@ class AccountDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("例如：招商银行储蓄卡")
+        self.name_input.setPlaceholderText(t("例如：招商银行储蓄卡"))
         self.name_input.setMaxLength(40)
         form.addRow(form_label("账户名称"), self.name_input)
 
@@ -60,28 +61,30 @@ class AccountDialog(QDialog):
         palette = colors()
         for type_name in ACCOUNT_TYPES:
             meta = ACCOUNT_TYPE_META[type_name]
-            suffix = "资产" if meta["group"] == "asset" else "负债"
+            suffix = t("资产") if meta["group"] == "asset" else t("负债")
             self.type_combo.addItem(
                 icon(meta["icon"], palette.muted, 17),
-                f"{meta['label']} · {suffix}",
+                f"{account_type_display(meta['label'])} · {suffix}",
                 type_name,
             )
         form.addRow(form_label("账户类型"), self.type_combo)
 
         self.currency_combo = QComboBox()
         for code, meta in CURRENCIES.items():
-            self.currency_combo.addItem(f"{code} · {meta['name']}", code)
-        self.currency_combo.setToolTip("账户余额以此币种记账；总览按每日汇率折算")
+            self.currency_combo.addItem(
+                currency_display(code, meta["symbol"], meta["name"]), code
+            )
+        self.currency_combo.setToolTip(t("账户余额以此币种记账；总览按每日汇率折算"))
         form.addRow(form_label("账户币种"), self.currency_combo)
 
         self.opening_input = QLineEdit()
-        self.opening_input.setPlaceholderText("0.00，例如：12000")
+        self.opening_input.setPlaceholderText(t("0.00，例如：12000"))
         self.opening_input.setMaxLength(20)
         self.opening_label = form_label("期初余额")
         form.addRow(self.opening_label, self.opening_input)
 
         self.note_input = QLineEdit()
-        self.note_input.setPlaceholderText("可选备注，例如：工资卡")
+        self.note_input.setPlaceholderText(t("可选备注，例如：工资卡"))
         self.note_input.setMaxLength(120)
         form.addRow(form_label("备注"), self.note_input)
         layout.addLayout(form)
@@ -104,12 +107,12 @@ class AccountDialog(QDialog):
                 self.currency_combo.setCurrentIndex(index)
             if service.repo.account_usage(account.id) or self.valuation_count:
                 self.currency_combo.setEnabled(False)
-                self.currency_combo.setToolTip("已有记录，不能修改账户币种")
+                self.currency_combo.setToolTip(t("已有记录，不能修改账户币种"))
             if self.valuation_count:
                 self.type_combo.setEnabled(False)
-                self.type_combo.setToolTip("账户已有市值记录，不能更改类型")
+                self.type_combo.setToolTip(t("账户已有市值记录，不能更改类型"))
                 self.opening_input.setEnabled(False)
-                self.opening_input.setToolTip("余额由最新市值与后续流水决定")
+                self.opening_input.setToolTip(t("余额由最新市值与后续流水决定"))
             opening = (
                 abs(account.opening_balance)
                 if account.is_liability
@@ -139,31 +142,37 @@ class AccountDialog(QDialog):
         liability = bool(meta and meta["group"] == "liability")
         currency = self.currency_combo.currentData() or "CNY"
         symbol = CURRENCIES.get(currency, CURRENCIES["CNY"])["symbol"]
-        self.opening_label.setText("欠款金额" if liability else "期初余额")
+        self.opening_label.setText(t("欠款金额" if liability else "期初余额"))
         if self.valuation_count:
-            self.opening_label.setText("期初余额")
-            self.opening_input.setToolTip("余额由最新市值与后续流水决定")
+            self.opening_label.setText(t("期初余额"))
+            self.opening_input.setToolTip(t("余额由最新市值与后续流水决定"))
             self.hint.setText(
-                "该投资账户已使用每日市值：当前余额 = 最新市值 + 市值日之后的收支/转账。"
-                "如需修正历史，请到账户页打开「市值记录」。"
+                t(
+                    "该投资账户已使用每日市值：当前余额 = 最新市值 + 市值日之后的收支/转账。"
+                    "如需修正历史，请到账户页打开「市值记录」。"
+                )
             )
             return
         if liability:
             self.opening_input.setPlaceholderText(
-                f"填写欠款正数，例如：12000（{currency}）"
+                t("填写欠款正数，例如：12000（{currency}）", currency=currency)
             )
-            hint = (
+            hint = t(
                 "信用卡、贷款填写欠款金额即可（正数），系统会以负数余额计入负债。"
             )
             if self.account and self.account.is_liability and self.account.opening_balance > 0:
-                hint += " 当前期初余额为正，直接保存就会按欠款记为负债。"
+                hint += t(" 当前期初余额为正，直接保存就会按欠款记为负债。")
             self.hint.setText(hint)
         else:
             self.opening_input.setPlaceholderText(
-                f"0.00，例如：12000（{currency}）"
+                t("0.00，例如：12000（{currency}）", currency=currency)
             )
             self.hint.setText(
-                f"账户以 {currency}（{symbol}）记账；余额 = 期初余额 + 收入 − 支出 ± 转账。"
+                t(
+                    "账户以 {currency}（{symbol}）记账；余额 = 期初余额 + 收入 − 支出 ± 转账。",
+                    currency=currency,
+                    symbol=symbol,
+                )
             )
 
     def _save(self) -> None:

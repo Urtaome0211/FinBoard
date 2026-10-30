@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from ...core.dates import days_in_month, month_label, month_of, today
 from ...core.models import BudgetLine
+from ...i18n import category_display, t
 from ..dialogs import BudgetDialog
 from ..theme import colors, tone_for_ratio
 from ..widgets import (
@@ -60,14 +61,15 @@ class BudgetRow(QFrame):
         top = QHBoxLayout()
         top.setSpacing(9)
         top.addWidget(Dot(line.color, 9))
-        name = QLabel(line.name)
+        name = QLabel(category_display(line.name))
+        name.setProperty("i18nSkip", True)
         name.setStyleSheet("font-weight: 600;")
         top.addWidget(name)
         top.addStretch(1)
         percent = Badge(f"{line.ratio * 100:.0f}%", tone)
         top.addWidget(percent)
-        edit = IconButton("edit", "编辑预算", size=15)
-        delete = IconButton("trash", "删除预算", size=15)
+        edit = IconButton("edit", t("编辑预算"), size=15)
+        delete = IconButton("trash", t("删除预算"), size=15)
         for button in (edit, delete):
             button.setFixedSize(28, 28)
             top.addWidget(button)
@@ -84,18 +86,18 @@ class BudgetRow(QFrame):
         used = QLabel(f"{service.format(line.spent)} / {service.format(line.amount)}")
         used.setProperty("role", "muted")
         used.setStyleSheet("font-size: 11px;")
-        used.setFixedWidth(150)
+        used.setFixedWidth(142)
         used.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         bottom.addWidget(used)
         remaining = line.remaining
         left = QLabel(
-            f"超支 {service.format(-remaining)}"
+            t("超支 {amount}", amount=service.format(-remaining))
             if remaining < 0
-            else f"剩余 {service.format(remaining)}"
+            else t("剩余 {amount}", amount=service.format(remaining))
         )
         left.setProperty("role", "danger" if remaining < 0 else "muted")
         left.setStyleSheet("font-size: 11px;")
-        left.setFixedWidth(112)
+        left.setFixedWidth(150)
         left.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         bottom.addWidget(left)
         outer.addLayout(bottom)
@@ -173,7 +175,9 @@ class BudgetsPage(Page):
         lines = self.service.repo.budget_lines(month)
         total = next((line for line in lines if line.is_overall), None)
         categories = [line for line in lines if not line.is_overall]
-        self.header.set_subtitle(f"{month_label(month)} · 给支出设一条安全线")
+        self.header.set_subtitle(
+            f"{month_label(month)} · {t('给支出设一条安全线')}"
+        )
 
         self._rebuild_hero(total)
         self._rebuild_stats(total)
@@ -186,20 +190,23 @@ class BudgetsPage(Page):
             self.hero_body.addWidget(
                 EmptyState(
                     "target",
-                    "这个月还没有总预算",
-                    "先设一个月度上限，再按分类拆分，超支时就能及时看到。",
-                    "设置本月预算",
+                    t("这个月还没有总预算"),
+                    t("先设一个月度上限，再按分类拆分，超支时就能及时看到。"),
+                    t("设置本月预算"),
                     self._add,
                 )
             )
             return
 
         top = QHBoxLayout()
-        title = QLabel("本月总预算")
+        title = QLabel(t("本月总预算"))
         title.setProperty("role", "cardTitle")
         top.addWidget(title)
         top.addStretch(1)
-        status = Badge("预算健康" if total.ratio <= 1 else "已超支", "success" if total.ratio <= 1 else "danger")
+        status = Badge(
+            t("预算健康") if total.ratio <= 1 else t("已超支"),
+            "success" if total.ratio <= 1 else "danger",
+        )
         top.addWidget(status)
         self.hero_body.addLayout(top)
 
@@ -209,15 +216,15 @@ class BudgetsPage(Page):
         row.addWidget(amount)
         hint_column = QVBoxLayout()
         hint_column.setSpacing(2)
-        used = QLabel(f"已用 {self.service.format(total.spent)}")
+        used = QLabel(t("已用 {amount}", amount=self.service.format(total.spent)))
         used.setProperty("role", "muted")
         hint_column.addWidget(used)
         remaining = total.remaining
         if remaining < 0:
-            detail = f"超出预算 {self.service.format(-remaining)}"
+            detail = t("超出预算 {amount}", amount=self.service.format(-remaining))
             detail_role = "danger"
         else:
-            detail = f"还可花 {self.service.format(remaining)}"
+            detail = t("还可花 {amount}", amount=self.service.format(remaining))
             detail_role = "success"
         detail_label = QLabel(detail)
         detail_label.setProperty("role", detail_role)
@@ -227,7 +234,13 @@ class BudgetsPage(Page):
 
         if month_of(today()) == total.month and total.remaining > 0:
             days_left = max(1, days_in_month(total.month) - today().day + 1)
-            daily = QLabel(f"剩余 {days_left} 天 · 日均可用 {self.service.format(total.remaining // days_left)}")
+            daily = QLabel(
+                t(
+                    "剩余 {days} 天 · 日均可用 {amount}",
+                    days=days_left,
+                    amount=self.service.format(total.remaining // days_left),
+                )
+            )
             daily.setProperty("role", "faint")
             row.addWidget(daily, 0, Qt.AlignmentFlag.AlignBottom)
         self.hero_body.addLayout(row)
@@ -240,30 +253,34 @@ class BudgetsPage(Page):
 
     def _rebuild_stats(self, total: BudgetLine | None) -> None:
         if total is None:
-            self.used_card.set_value("¥0.00", hint="尚未设置预算", tone="text")
-            self.remain_card.set_value("¥0.00", hint="—", tone="text")
-            self.rate_card.set_value("0%", hint="预算使用率", tone="text")
+            self.used_card.set_value(
+                self.service.format(0), hint=t("尚未设置预算"), tone="text"
+            )
+            self.remain_card.set_value(
+                self.service.format(0), hint="—", tone="text"
+            )
+            self.rate_card.set_value("0%", hint=t("预算使用率"), tone="text")
             return
         self.used_card.set_value(
             self.service.format(total.spent),
-            hint=f"预算 {self.service.format(total.amount)}",
+            hint=t("预算 {amount}", amount=self.service.format(total.amount)),
             tone="expense",
         )
         if total.remaining < 0:
             self.remain_card.set_value(
                 self.service.format(total.remaining),
-                hint="已超出总预算",
+                hint=t("已超出总预算"),
                 tone="expense",
             )
         else:
             self.remain_card.set_value(
                 self.service.format(total.remaining),
-                hint="尚可支出",
+                hint=t("尚可支出"),
                 tone="income",
             )
         self.rate_card.set_value(
             f"{total.ratio * 100:.0f}%",
-            hint="已用 / 总预算",
+            hint=t("已用 / 总预算"),
             tone="danger" if total.ratio > 1 else ("warning" if total.ratio > 0.8 else "primary"),
         )
 
@@ -273,9 +290,9 @@ class BudgetsPage(Page):
             self.list_layout.addWidget(
                 EmptyState(
                     "target",
-                    "还没有分类预算",
-                    "给餐饮、购物等分类设上限，比只看总额更容易控制。",
-                    "添加分类预算",
+                    t("还没有分类预算"),
+                    t("给餐饮、购物等分类设上限，比只看总额更容易控制。"),
+                    t("添加分类预算"),
                     self._add,
                 )
             )
@@ -295,9 +312,15 @@ class BudgetsPage(Page):
         if not over:
             self.alert.hide()
             return
-        names = "、".join(line.name for line in over[:3])
-        more = f" 等 {len(over)} 项" if len(over) > 3 else ""
-        self.alert_label.setText(f"{names}{more} 已超出预算，建议检查最近的支出。")
+        names = t("、").join(category_display(line.name) for line in over[:3])
+        if len(over) > 3:
+            names += t(" 等 {count} 项", count=len(over))
+        self.alert_label.setText(
+            t(
+                "{names} 已超出预算，建议检查最近的支出。",
+                names=names,
+            )
+        )
         self.alert.show()
 
     # ------------------------------------------------------------------
@@ -310,12 +333,18 @@ class BudgetsPage(Page):
     def _delete(self, line: BudgetLine) -> None:
         if not ConfirmDialog.confirm(
             self,
-            "删除这条预算？",
-            f"将删除「{line.name}」在 {month_label(line.month)} 的预算，不会影响交易记录。",
-            ok_text="删除",
+            t("删除这条预算？"),
+            t(
+                "将删除「{name}」在 {month} 的预算，不会影响交易记录。",
+                name=category_display(line.name),
+                month=month_label(line.month),
+            ),
+            ok_text=t("删除"),
             danger=True,
             icon_name="trash",
         ):
             return
         self.service.delete_budget(line.id)
-        self.window.notify(f"已删除「{line.name}」预算")
+        self.window.notify(
+            t("已删除「{name}」预算", name=category_display(line.name))
+        )

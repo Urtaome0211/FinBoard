@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import __app_name__, __app_name_cn__, __version__
+from ...i18n import currency_display, language, t
 from ...core.money import CURRENCIES
 from ..dialogs import CategoryManagerDialog
 from ..theme import theme_mode, theme_store
@@ -42,10 +43,11 @@ class SettingsPage(Page):
         self.service = service
         self.window = window
 
-        header = PageHeader("设置", "外观、货币、分类与本地数据")
+        header = PageHeader("设置", "外观、语言、货币、分类与本地数据")
         self.header = header
         self.body.addWidget(header)
 
+        self._build_language()
         self._build_appearance()
         self._build_currency()
         self._build_rates()
@@ -73,6 +75,20 @@ class SettingsPage(Page):
         row.addLayout(text, 1)
         return row
 
+    def _build_language(self) -> None:
+        card = Card(padding=20, spacing=14)
+        card.add_header("语言", "界面语言切换后立即生效，默认中文")
+        row = self._row("界面语言", "English / 中文")
+        self.language_control = SegmentedControl(
+            [("中文", "zh"), ("English", "en")], language()
+        )
+        self.language_control.setProperty("i18nSkip", True)
+        self.language_control.setFixedWidth(220)
+        self.language_control.changed.connect(self.window.set_language)
+        row.addWidget(self.language_control)
+        card.body.addLayout(row)
+        self.body.addWidget(card)
+
     def _build_appearance(self) -> None:
         card = Card(padding=20, spacing=14)
         card.add_header("外观", "扁平化界面，两套配色")
@@ -94,8 +110,11 @@ class SettingsPage(Page):
             "账户按各自币种记账；汇总时按交易日期汇率折算为基准币种。切换前需先更新汇率。",
         )
         self.currency_combo = ComboBox()
+        self.currency_combo.setMinimumWidth(230)
         for code, info in CURRENCIES.items():
-            self.currency_combo.addItem(f"{code} · {info['symbol']} {info['name']}", code)
+            self.currency_combo.addItem(
+                currency_display(code, info["symbol"], info["name"]), code
+            )
         index = self.currency_combo.findData(self.service.currency)
         if index >= 0:
             self.currency_combo.setCurrentIndex(index)
@@ -144,13 +163,19 @@ class SettingsPage(Page):
         store = self.service.rate_store
         latest = store.latest_date()
         if not latest:
-            self.rate_status.setText("尚未更新汇率；外币交易需要先更新。")
+            self.rate_status.setText(t("尚未更新汇率；外币交易需要先更新。"))
             self.rate_detail.setText("")
             return
         error = store.last_error()
-        status = f"最新汇率日期：{latest} · 来源 Frankfurter/ECB"
         if error:
-            status += "（上次更新失败，当前使用缓存）"
+            status = t(
+                "最新汇率日期：{date} · 来源 Frankfurter/ECB（上次更新失败，当前使用缓存）",
+                date=latest,
+            )
+        else:
+            status = t(
+                "最新汇率日期：{date} · 来源 Frankfurter/ECB", date=latest
+            )
         self.rate_status.setText(status)
         try:
             rates = store.rates_for(latest)
@@ -245,7 +270,7 @@ class SettingsPage(Page):
         blurb.setProperty("role", "muted")
         about.body.addWidget(blurb)
         meta = QLabel(
-            f"版本 {__version__}   ·   PySide6 / SQLite   ·   MIT License"
+            f"{t('版本 {version}', version=__version__)}   ·   PySide6 / SQLite   ·   MIT License"
         )
         meta.setProperty("role", "faint")
         about.body.addWidget(meta)
