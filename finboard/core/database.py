@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -276,6 +276,21 @@ CREATE INDEX IF NOT EXISTS idx_savings_goals_date ON savings_goals(target_date);
 """
 
 
+SCHEMA_V11 = """
+ALTER TABLE holdings ADD COLUMN realized_profit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE holdings ADD COLUMN dividends INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS undo_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    action     TEXT    NOT NULL,
+    payload    TEXT    NOT NULL,
+    created_at TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_undo_log_created ON undo_log(created_at, id);
+"""
+
+
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
 
@@ -342,6 +357,9 @@ class Database:
         if version < 10:
             conn.executescript(SCHEMA_V10)
             version = 10
+        if version < 11:
+            conn.executescript(SCHEMA_V11)
+            version = 11
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

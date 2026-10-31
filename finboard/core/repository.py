@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import calendar
+import json
 import sqlite3
 from datetime import date as date_cls
 from datetime import timedelta
@@ -959,6 +960,8 @@ class Repository:
             created_at=row["created_at"] or "",
             currency=row["currency"] or "CNY",
             account_name=row["account_name"] or "",
+            realized_profit=int(row["realized_profit"] or 0),
+            dividends=int(row["dividends"] or 0),
         )
 
     def _validate_holding(
@@ -981,10 +984,22 @@ class Repository:
                 raise ValueError(f"{label}无效")
         return name, quantity_units, int(cost_price), int(price)
 
+    @staticmethod
+    def _validate_holding_returns(
+        realized_profit: int, dividends: int
+    ) -> tuple[int, int]:
+        realized_profit = int(realized_profit or 0)
+        dividends = int(dividends or 0)
+        if abs(realized_profit) > MAX_AMOUNT_CENTS:
+            raise ValueError("已实现收益金额过大")
+        if dividends < 0 or dividends > MAX_AMOUNT_CENTS:
+            raise ValueError("累计分红不能为负数")
+        return realized_profit, dividends
+
     def holdings(self, account_id: int | None = None) -> list[Holding]:
         sql = (
             "SELECT h.id, h.account_id, h.symbol, h.name, h.quantity_units,"
-            " h.cost_price, h.price, h.note, h.created_at,"
+            " h.cost_price, h.price, h.note, h.created_at, h.realized_profit, h.dividends,"
             " a.currency AS currency, a.name AS account_name"
             " FROM holdings h JOIN accounts a ON a.id = h.account_id"
         )
@@ -998,7 +1013,7 @@ class Repository:
     def get_holding(self, holding_id: int) -> Holding:
         row = self.conn.execute(
             "SELECT h.id, h.account_id, h.symbol, h.name, h.quantity_units,"
-            " h.cost_price, h.price, h.note, h.created_at,"
+            " h.cost_price, h.price, h.note, h.created_at, h.realized_profit, h.dividends,"
             " a.currency AS currency, a.name AS account_name"
             " FROM holdings h JOIN accounts a ON a.id = h.account_id WHERE h.id = ?",
             (holding_id,),
@@ -1017,14 +1032,19 @@ class Repository:
         cost_price: int,
         price: int,
         note: str = "",
+        realized_profit: int = 0,
+        dividends: int = 0,
     ) -> int:
         name, quantity_units, cost_price, price = self._validate_holding(
             account_id, name, quantity_units, cost_price, price
         )
+        realized_profit, dividends = self._validate_holding_returns(
+            realized_profit, dividends
+        )
         cursor = self.conn.execute(
             "INSERT INTO holdings (account_id, symbol, name, quantity_units,"
-            " cost_price, price, note, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " cost_price, price, note, realized_profit, dividends, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 int(account_id),
                 str(symbol or "").strip().upper()[:20],
@@ -1033,6 +1053,8 @@ class Repository:
                 cost_price,
                 price,
                 str(note or "").strip()[:200],
+                realized_profit,
+                dividends,
                 now_iso(),
             ),
         )
@@ -1050,14 +1072,20 @@ class Repository:
         cost_price: int,
         price: int,
         note: str = "",
+        realized_profit: int = 0,
+        dividends: int = 0,
     ) -> None:
         self.get_holding(holding_id)
         name, quantity_units, cost_price, price = self._validate_holding(
             account_id, name, quantity_units, cost_price, price
         )
+        realized_profit, dividends = self._validate_holding_returns(
+            realized_profit, dividends
+        )
         self.conn.execute(
             "UPDATE holdings SET account_id = ?, symbol = ?, name = ?,"
-            " quantity_units = ?, cost_price = ?, price = ?, note = ?, updated_at = ?"
+            " quantity_units = ?, cost_price = ?, price = ?, note = ?,"
+            " realized_profit = ?, dividends = ?, updated_at = ?"
             " WHERE id = ?",
             (
                 int(account_id),
@@ -1067,6 +1095,8 @@ class Repository:
                 cost_price,
                 price,
                 str(note or "").strip()[:200],
+                realized_profit,
+                dividends,
                 now_iso(),
                 holding_id,
             ),
@@ -1082,10 +1112,24 @@ class Repository:
         if account_id is None:
             cost = sum(self._to_base(item.cost_value, item.currency) for item in rows)
             market = sum(self._to_base(item.market_value, item.currency) for item in rows)
+            realized = sum(
+                self._to_base(item.realized_profit, item.currency) for item in rows
+            )
+            dividends = sum(
+                self._to_base(item.dividends, item.currency) for item in rows
+            )
         else:
             cost = sum(item.cost_value for item in rows)
             market = sum(item.market_value for item in rows)
-        return HoldingsSummary(cost=cost, market=market, count=len(rows))
+            realized = sum(item.realized_profit for item in rows)
+            dividends = sum(item.dividends for item in rows)
+        return HoldingsSummary(
+            cost=cost,
+            market=market,
+            count=len(rows),
+            realized=realized,
+            dividends=dividends,
+        )
 
     def set_cash_balance(self, account_id: int, target: int) -> int:
         """Set the cash portion of an investment account without touching holdings."""
@@ -1922,6 +1966,124 @@ class Repository:
         if tag_names is not None:
             self._replace_tags(transaction_id, tag_names)
         self.conn.commit()
+
+    # ----------------------------------------------------------- bulk & undo
+    def bulk_update_transactions(
+        self,
+        transaction_ids: Iterable[int],
+        *,
+        category_id: int | None = None,
+        add_tags: Iterable[str] | None = None,
+        remove_tags: Iterable[str] | None = None,
+    ) -> int:
+        """Update category/tags for many rows and remember how to undo it."""
+        ids = sorted({int(item) for item in transaction_ids})
+        if not ids:
+            return 0
+        add_names = self._normalize_tags(add_tags)
+        remove_names = {name.casefold() for name in self._normalize_tags(remove_tags)}
+        if category_id is None and not add_names and not remove_names:
+            return 0
+        category = self.get_category(category_id) if category_id is not None else None
+        placeholders = ",".join("?" for _ in ids)
+        rows = self.conn.execute(
+            f"SELECT id, kind, category_id FROM transactions WHERE id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+        if not rows:
+            return 0
+        previous: list[dict[str, object]] = []
+        for row in rows:
+            split_count = self.conn.execute(
+                "SELECT COUNT(*) FROM transaction_splits WHERE transaction_id = ?",
+                (row["id"],),
+            ).fetchone()[0]
+            if row["kind"] == "transfer":
+                continue
+            if category is not None:
+                if row["kind"] != category.kind:
+                    continue
+                if split_count:
+                    # Changing the primary category of a split transaction
+                    # would leave the splits pointing at another category.
+                    continue
+            tag_rows = self.conn.execute(
+                "SELECT t.name FROM tags t"
+                " JOIN transaction_tags tt ON tt.tag_id = t.id"
+                " WHERE tt.transaction_id = ? ORDER BY t.name",
+                (row["id"],),
+            ).fetchall()
+            previous.append(
+                {
+                    "id": int(row["id"]),
+                    "category_id": row["category_id"],
+                    "tags": [tag["name"] for tag in tag_rows],
+                }
+            )
+        if not previous:
+            return 0
+        with self.db.transaction() as conn:
+            for item in previous:
+                transaction_id = int(item["id"])
+                if category_id is not None:
+                    conn.execute(
+                        "UPDATE transactions SET category_id = ?, updated_at = ?"
+                        " WHERE id = ?",
+                        (category_id, now_iso(), transaction_id),
+                    )
+                if add_names or remove_names:
+                    current = [
+                        str(tag["name"])
+                        for tag in conn.execute(
+                            "SELECT t.name FROM tags t"
+                            " JOIN transaction_tags tt ON tt.tag_id = t.id"
+                            " WHERE tt.transaction_id = ?",
+                            (transaction_id,),
+                        )
+                    ]
+                    next_names = [
+                        name for name in current if name.casefold() not in remove_names
+                    ]
+                    known = {name.casefold() for name in next_names}
+                    for name in add_names:
+                        if name.casefold() not in known:
+                            next_names.append(name)
+                            known.add(name.casefold())
+                    self._replace_tags(transaction_id, next_names)
+            conn.execute(
+                "INSERT INTO undo_log (action, payload, created_at) VALUES (?, ?, ?)",
+                (
+                    "bulk_update",
+                    json.dumps(previous, ensure_ascii=False, separators=(",", ":")),
+                    now_iso(),
+                ),
+            )
+        return len(previous)
+
+    def has_undo(self) -> bool:
+        return bool(self.conn.execute("SELECT 1 FROM undo_log LIMIT 1").fetchone())
+
+    def undo_last(self) -> str:
+        row = self.conn.execute(
+            "SELECT id, action, payload FROM undo_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return ""
+        payload = json.loads(row["payload"])
+        with self.db.transaction() as conn:
+            for item in payload:
+                conn.execute(
+                    "UPDATE transactions SET category_id = ?, updated_at = ?"
+                    " WHERE id = ?",
+                    (item.get("category_id"), now_iso(), int(item["id"])),
+                )
+                self._replace_tags(
+                    int(item["id"]), [str(name) for name in item.get("tags", [])]
+                )
+            conn.execute("DELETE FROM undo_log WHERE id = ?", (row["id"],))
+        if row["action"] == "bulk_update":
+            return f"已撤销 {len(payload)} 笔批量修改"
+        return "已撤销上一步操作"
 
     # ------------------------------------------------------- tags & attachments
     def tags(self) -> list[Tag]:

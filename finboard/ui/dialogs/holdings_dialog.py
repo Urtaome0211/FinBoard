@@ -72,6 +72,10 @@ class HoldingDialog(QDialog):
         self.cost_input.setPlaceholderText(t("每股成本价"))
         self.price_input = QLineEdit()
         self.price_input.setPlaceholderText(t("当前市价"))
+        self.realized_input = QLineEdit()
+        self.realized_input.setPlaceholderText(t("卖出后的累计已实现收益，可为负"))
+        self.dividends_input = QLineEdit()
+        self.dividends_input.setPlaceholderText(t("累计收到的现金分红"))
         self.note_input = QLineEdit()
         self.note_input.setPlaceholderText(t("可选备注，例如：长期持有"))
 
@@ -80,6 +84,8 @@ class HoldingDialog(QDialog):
         form.addRow(form_label(t("数量")), self.quantity_input)
         form.addRow(form_label(t("成本价")), self.cost_input)
         form.addRow(form_label(t("现价")), self.price_input)
+        form.addRow(form_label(t("已实现收益")), self.realized_input)
+        form.addRow(form_label(t("累计分红")), self.dividends_input)
         form.addRow(form_label(t("备注")), self.note_input)
         root.addLayout(form)
 
@@ -98,7 +104,13 @@ class HoldingDialog(QDialog):
         save_button.clicked.connect(self._save)
         root.addLayout(footer)
 
-        for field in (self.quantity_input, self.cost_input, self.price_input):
+        for field in (
+            self.quantity_input,
+            self.cost_input,
+            self.price_input,
+            self.realized_input,
+            self.dividends_input,
+        ):
             field.textChanged.connect(self._update_preview)
         self.name_input.setFocus()
 
@@ -108,6 +120,8 @@ class HoldingDialog(QDialog):
             self.quantity_input.setText(format_quantity(holding.quantity_units))
             self.cost_input.setText(format_cents(holding.cost_price, ""))
             self.price_input.setText(format_cents(holding.price, ""))
+            self.realized_input.setText(format_cents(holding.realized_profit, ""))
+            self.dividends_input.setText(format_cents(holding.dividends, ""))
             self.note_input.setText(holding.note)
         self._update_preview()
 
@@ -119,20 +133,34 @@ class HoldingDialog(QDialog):
             raise ValueError(t("成本价和现价不能为负数"))
         return quantity, cost, price
 
+    def _return_values(self) -> tuple[int, int]:
+        realized = parse_signed_amount(
+            self.realized_input.text().strip() or "0", allow_zero=True
+        )
+        dividends = parse_signed_amount(
+            self.dividends_input.text().strip() or "0", allow_zero=True
+        )
+        if dividends < 0:
+            raise ValueError(t("累计分红不能为负数"))
+        return realized, dividends
+
     def _update_preview(self) -> None:
         try:
             quantity, cost, price = self._values()
+            realized, dividends = self._return_values()
         except ValueError:
             self.preview.setText(t("填写数量、成本价与现价后显示市值和盈亏"))
             return
         cost_value = (quantity * cost + 500_000) // 1_000_000
         market = (quantity * price + 500_000) // 1_000_000
         profit = market - cost_value
+        total = profit + realized + dividends
         self.preview.setText(
-            t("成本 {cost} · 市值 {value} · 浮动盈亏 {profit}").format(
+            t("成本 {cost} · 市值 {value} · 浮动盈亏 {profit} · 累计收益 {total}").format(
                 cost=self.service.format_money(cost_value, self.account.currency),
                 value=self.service.format_money(market, self.account.currency),
                 profit=self.service.format_money(profit, self.account.currency, plus=True),
+                total=self.service.format_money(total, self.account.currency, plus=True),
             )
         )
 
@@ -144,6 +172,7 @@ class HoldingDialog(QDialog):
             return
         try:
             quantity, cost, price = self._values()
+            realized, dividends = self._return_values()
         except ValueError as exc:
             show_error(self.error, str(exc))
             return
@@ -158,6 +187,8 @@ class HoldingDialog(QDialog):
                     cost_price=cost,
                     price=price,
                     note=self.note_input.text().strip(),
+                    realized_profit=realized,
+                    dividends=dividends,
                 )
             else:
                 self.service.add_holding(
@@ -168,6 +199,8 @@ class HoldingDialog(QDialog):
                     cost_price=cost,
                     price=price,
                     note=self.note_input.text().strip(),
+                    realized_profit=realized,
+                    dividends=dividends,
                 )
         except ValueError as exc:
             show_error(self.error, str(exc))
@@ -292,12 +325,14 @@ class HoldingsDialog(QDialog):
         self.cash_value = ValueLabel("", size=18, weight=700)
         self.total_value = ValueLabel("", size=18, weight=700)
         self.profit_value = ValueLabel("", size=18, weight=700)
+        self.total_profit_value = ValueLabel("", size=18, weight=700)
         for label, widget in (
             (t("持仓成本"), self.cost_value),
             (t("当前市值"), self.market_value),
             (t("现金"), self.cash_value),
             (t("账户总值"), self.total_value),
             (t("浮动盈亏"), self.profit_value),
+            (t("累计收益"), self.total_profit_value),
         ):
             column = QVBoxLayout()
             column.setSpacing(2)
@@ -433,6 +468,23 @@ class HoldingsDialog(QDialog):
         )
         self.profit_value.set_tone(
             "income" if summary.profit > 0 else "expense" if summary.profit < 0 else "muted"
+        )
+        self.total_profit_value.setText(
+            self.service.format_money(summary.total_profit, symbol, plus=True)
+        )
+        self.total_profit_value.set_tone(
+            "income"
+            if summary.total_profit > 0
+            else "expense"
+            if summary.total_profit < 0
+            else "muted"
+        )
+        self.total_profit_value.setToolTip(
+            t("浮动盈亏 {profit} · 已实现 {realized} · 分红 {dividends}").format(
+                profit=self.service.format_money(summary.profit, symbol),
+                realized=self.service.format_money(summary.realized, symbol),
+                dividends=self.service.format_money(summary.dividends, symbol),
+            )
         )
         has_rows = bool(rows)
         self.table.setVisible(has_rows)

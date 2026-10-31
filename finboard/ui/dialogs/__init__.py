@@ -2,6 +2,7 @@
 
 from .account_dialog import AccountDialog
 from .budget_dialog import BudgetDialog
+from .bulk_edit import BulkEditDialog
 from .category_dialog import CategoryDialog
 from .category_manager import CategoryManagerDialog
 from .csv_import import CsvImportDialog
@@ -16,6 +17,7 @@ from .valuation_dialog import ValuationDialog
 __all__ = [
     "AccountDialog",
     "BudgetDialog",
+    "BulkEditDialog",
     "CategoryDialog",
     "CategoryManagerDialog",
     "CsvImportDialog",

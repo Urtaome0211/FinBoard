@@ -37,7 +37,7 @@ class V30Test(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 )
             }
-        self.assertEqual(version, 10)
+        self.assertEqual(version, 11)
         for name in (
             "tags",
             "transaction_tags",

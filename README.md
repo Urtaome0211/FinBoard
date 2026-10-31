@@ -20,20 +20,20 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 ### 功能
 
 - **总览**：净资产、本月收入/支出/结余、资产与负债百分比环图、近 6 个月趋势、最近记录、预算进度。
-- **收支明细**：按月份、类型、账户、分类、标签筛选，支持关键词搜索；每笔显示对应账户动账后的余额（转账显示转出账户余额）；双击编辑、右键删除、Delete 删除；支持拆分、标签、附件与 CSV 导出。
+- **收支明细**：按月份、类型、账户、分类、标签筛选，支持关键词搜索；每笔显示对应账户动账后的余额（转账显示转出账户余额）；双击编辑、右键删除、Delete 删除；支持拆分、标签、附件与 CSV 导出；多选后批量改分类/加移除标签，可撤销上一笔批量修改。
 - **账户**：现金、储蓄卡、投资理财、信用卡、贷款五类账户；每个账户可设自己的币种；实时余额由期初余额和流水聚合得出；信用卡/贷款按欠款金额（正数）录入，自动计入负债；支持归档与恢复。
 - **投资市值**：投资理财账户可按日记录收盘总市值，账户余额自动变为「最新市值 + 市值日之后的流水」；带历史曲线、同日覆盖、删除重算，市值变动不计入收支。
 - **多币种**：账户级 + 交易级币种；按每个交易日的汇率折算后汇总，周末和节假日沿用最近一个工作日；基准币种可切换，总览/报表/预算统一按基准币种显示。
 - **钱包提现手续费**：从「支付宝钱包」或「微信钱包」转出时，按 0.1% 自动扣手续费（支付宝最低 ¥0.10，微信最低 ¥0.01）；全部提现时手续费包含在提现金额中，部分提现时从剩余余额另扣；可勾选「本次豁免手续费」。手续费计入支出统计，报表中归入「提现手续费」。
 - **定期交易**：把房租、工资、会员费等设为每日/每周/每月/每年重复；到期后在「定期」页确认入账，可单笔或全部入账，规则可暂停、编辑、删除。
 - **账户对账**：输入银行或钱包显示的账单余额，程序计算差额并写入账户校准；不会生成收支记录，可删除对账历史撤销调整；投资账户请使用市值快照。
-- **投资持仓与现金**：为投资账户登记股票、基金或 ETF 的数量、成本价和现价，自动计算成本、市值、浮动盈亏与收益率；持仓之外可单独填写现金，账户总值 = 现金 + 持仓市值，可一键按总值校准账户。
+- **投资持仓与现金**：为投资账户登记股票、基金或 ETF 的数量、成本价和现价，自动计算成本、市值、浮动盈亏与收益率；持仓之外可单独填写现金，账户总值 = 现金 + 持仓市值，可一键按总值校准账户；已实现收益、累计分红计入累计收益。
 - **预算结转**：勾选「结转到下月」后，本月未用完的正预算会带入下月；超支不结转，明细页显示结转额与可用预算。
 - **储蓄目标**：为目标设定金额、已存金额和可选日期，显示进度、剩余与达成状态，支持随时存入或取出。
 - **现金流预测**：按定期交易和最近 3 个月的非定期收支，预测未来 3/6/12 个月的收入、支出、净现金流和期末现金。
 - **汇率**：每日自动检查一次，也可在设置页手动刷新；数据来自 Frankfurter（欧洲央行参考汇率），缓存在本地，离线时继续使用最后一次汇率。
 - **预算**：按月设置总预算和分类预算，实时显示已用、剩余、使用率；超支时用红色提示；可开启跨月结转。
-- **报表**：资产/负债结构、本月支出构成、近 12 个月趋势、支出分类排行、消费对象 Top 5；可导出 Excel 或 PDF。
+- **报表**：投资组合汇总、资产/负债结构、本月支出构成、近 12 个月趋势、支出分类排行、消费对象 Top 5；可导出 Excel 或 PDF。
 - **记账**：支持支出、收入、账户间转账；可填写日期、金额、账户、分类、对方、备注。
 - **分类管理**：自定义支出/收入分类名称与颜色；删除分类时，历史记录自动归入「其他」。
 - **数据**：CSV 导入/导出（支持自定义列映射、保存导入规则、按日期/类型/金额/账户/对方去重）、数据库备份、载入演示数据、清空全部数据。
@@ -53,6 +53,10 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 | 预算 | 报表 |
 | --- | --- |
 | ![预算](docs/screenshots/budgets.png) | ![报表](docs/screenshots/reports.png) |
+
+| 批量编辑 | 批量修改对话框 |
+| --- | --- |
+| ![批量编辑](docs/screenshots/bulk-edit.png) | ![批量修改](docs/screenshots/bulk-dialog.png) |
 
 | 多币种明细 | 汇率与设置 |
 | --- | --- |
@@ -263,6 +267,7 @@ tests/test_v2.py            # 定期交易、对账、页面/对话框集成测�
 tests/test_v21.py           # 持仓、预算结转、储蓄目标、现金流预测
 tests/test_v21_ui.py        # 持仓/储蓄目标对话框
 tests/test_v30.py           # schema v10、拆分/标签/附件、CSV 规则、Excel 导出
+tests/test_v40.py           # 持仓已实现收益/分红、批量编辑与撤销
 scripts/                    # 冒烟、截图、图标生成
 docs/                       # 截图与 logo
 run.py                      # 源码入口
@@ -289,7 +294,7 @@ FinBoard.spec               # PyInstaller 构建配置
 ### 测试与构建
 
 ```bash
-# 单元测试（97 个）
+# 单元测试（102 个）
 python -m unittest discover -s tests
 
 # 核心冒烟（临时数据库、演示数据、CSV 往返）
@@ -339,20 +344,20 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 ### Features
 
 - **Dashboard**: net worth, monthly income/expense/balance, asset-vs-liability donut, 6-month trend, recent transactions and budget progress.
-- **Transactions**: filter by month, kind, account, category and tag; search by payee/note; each row shows the account balance after that posting (transfers show the source account); edit, delete, split across categories, tag, attach receipts and export to CSV.
+- **Transactions**: filter by month, kind, account, category and tag; search by payee/note; each row shows the account balance after that posting (transfers show the source account); edit, delete, split across categories, tag, attach receipts and export to CSV; select multiple rows to change category or add/remove tags in bulk, and undo the last bulk edit.
 - **Accounts**: cash, debit card, investment, credit card and loan accounts, each with its own currency. Balances are aggregated from the opening balance and transactions in real time. Archive and restore are supported.
 - **Investment valuations**: record a closing market value per day for investment accounts. The balance becomes “latest snapshot + later transactions”, with a history chart, same-day overwrite and delete-to-recalculate. Market moves are not counted as income or expense.
 - **Multi-currency**: account-level and transaction-level currencies. Amounts are converted at the transaction-date rate, with weekend/holiday fallback to the latest business day. The base currency can be switched; dashboard, reports and budgets are shown in it.
 - **Wallet withdrawal fees**: transfers out of “支付宝钱包” or “微信钱包” automatically add a 0.1% fee (minimum ¥0.10 for Alipay, ¥0.01 for WeChat). A full withdrawal includes the fee in the withdrawn amount; a partial withdrawal deducts it from the remaining balance. Tick “Waive fee” to skip it for one transfer. Fees are counted as expenses and grouped under “提现手续费” in reports.
 - **Recurring transactions**: create daily/weekly/monthly/yearly rules for rent, salary or subscriptions. Due rules appear on the Recurring page and are posted only after you confirm, individually or all at once; rules can be paused, edited or deleted.
 - **Account reconciliation**: enter the statement balance from a bank or wallet; FinBoard calculates the difference and writes a balance adjustment without creating income/expense rows. Delete a reconciliation to undo it; investment accounts use valuation snapshots instead.
-- **Holdings & cash**: record quantity, cost price and current price for stocks, funds or ETFs; FinBoard calculates cost basis, market value, unrealized P/L and return. Cash not invested in holdings can be entered separately, and the account total is cash plus holdings market value. A button revalues the account with that total.
+- **Holdings & cash**: record quantity, cost price and current price for stocks, funds or ETFs; FinBoard calculates cost basis, market value, unrealized P/L and return. Cash not invested in holdings can be entered separately, and the account total is cash plus holdings market value. A button revalues the account with that total. Realized gains and dividends are included in the total return.
 - **Budget rollover**: with “Roll over to next month” enabled, unused positive budget carries into the next month; overspending does not.
 - **Savings goals**: set a target, saved amount and optional date; track progress, remaining amount and completion, and deposit or withdraw at any time.
 - **Cash-flow forecast**: project income, expenses, net cash flow and ending cash for the next 3/6/12 months from recurring rules and the last 3 months of non-recurring activity.
 - **Rates**: one automatic check per day plus a manual refresh in Settings. Data comes from Frankfurter (ECB reference rates) and is cached locally, so offline use keeps the last known rates.
 - **Budgets**: per-month overall and per-category limits, with spent/remaining/usage, over-budget warnings and optional rollover (only positive unused amounts carry).
-- **Reports**: asset/liability structure, monthly expense composition, 12-month trend, category ranking and top payees; export to Excel or PDF.
+- **Reports**: asset/liability structure, monthly expense composition, 12-month trend, portfolio summary, category ranking and top payees; export to Excel or PDF.
 - **Bookkeeping**: expenses, income and account-to-account transfers with date, amount, account, category, payee and note.
 - **Categories**: custom names and colors; deleting a category moves its history to “Other”.
 - **Data tools**: CSV import/export with custom column mapping, saved import rules and duplicate detection (date, kind, amount, account, payee); database backup, demo data and full reset.
@@ -372,6 +377,10 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 | Budgets | Reports |
 | --- | --- |
 | ![Budgets](docs/screenshots/budgets-en.png) | ![Reports](docs/screenshots/reports-en.png) |
+
+| Bulk selection | Bulk edit |
+| --- | --- |
+| ![Bulk selection](docs/screenshots/bulk-edit.png) | ![Bulk edit](docs/screenshots/bulk-dialog.png) |
 
 | Multi-currency transactions | Rates & settings |
 | --- | --- |
@@ -544,7 +553,7 @@ Default location on Windows:
 ### Testing & build
 
 ```bash
-# 97 unit tests
+# 102 unit tests
 python -m unittest discover -s tests
 
 # Core smoke test (temporary DB, demo data, CSV round-trip)

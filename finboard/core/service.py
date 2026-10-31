@@ -13,6 +13,7 @@ from .dates import today_iso
 from .models import (
     AccountValuation,
     Attachment,
+    BulkResult,
     CsvRule,
     ForecastPoint,
     Holding,
@@ -125,6 +126,38 @@ class FinanceService(QObject):
     def delete_transaction(self, transaction_id: int) -> None:
         self.repo.delete_transaction(transaction_id)
         self.changed.emit()
+
+    def bulk_update_transactions(
+        self,
+        transaction_ids: list[int],
+        *,
+        category_id: int | None = None,
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
+    ) -> BulkResult:
+        selected = len(transaction_ids)
+        updated = self.repo.bulk_update_transactions(
+            transaction_ids,
+            category_id=category_id,
+            add_tags=add_tags,
+            remove_tags=remove_tags,
+        )
+        if updated:
+            self.changed.emit()
+        return BulkResult(
+            updated=updated,
+            skipped=max(0, selected - updated),
+            message=f"已更新 {updated} 笔交易",
+        )
+
+    def has_undo(self) -> bool:
+        return self.repo.has_undo()
+
+    def undo_last(self) -> str:
+        message = self.repo.undo_last()
+        if message:
+            self.changed.emit()
+        return message
 
     def transaction_balances(
         self, transaction_ids: list[int]

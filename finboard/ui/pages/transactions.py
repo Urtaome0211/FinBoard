@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from ...core.models import TransactionFilter
 from ...i18n import category_display, t
-from ..dialogs import MetadataDialog
+from ..dialogs import BulkEditDialog, MetadataDialog
 from ..models import KindBadgeDelegate, TransactionTableModel
 from ..widgets import (
     Card,
@@ -51,8 +52,13 @@ class TransactionsPage(Page):
         header = PageHeader("收支明细", "")
         export_button = ThemedButton(t("导出 CSV"), "secondary", "download")
         export_button.clicked.connect(self._export)
+        self.undo_button = ThemedButton(t("撤销"), "ghost", "refresh")
+        self.undo_button.setToolTip(t("撤销上一笔批量修改"))
+        self.undo_button.setEnabled(False)
+        self.undo_button.clicked.connect(self._undo)
         record_button = ThemedButton(t("记一笔"), "primary", "plus")
         record_button.clicked.connect(lambda: self.window.open_transaction())
+        header.add_action(self.undo_button)
         header.add_action(export_button)
         header.add_action(record_button)
         self.header = header
@@ -105,7 +111,7 @@ class TransactionsPage(Page):
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.table.setAlternatingRowColors(False)
@@ -147,6 +153,24 @@ class TransactionsPage(Page):
         self.stack.addWidget(self.empty)
         self.body.addWidget(self.stack, 1)
 
+        self.batch_bar = QFrame()
+        self.batch_bar.setObjectName("SoftCard")
+        batch_layout = QHBoxLayout(self.batch_bar)
+        batch_layout.setContentsMargins(14, 8, 14, 8)
+        batch_layout.setSpacing(10)
+        self.batch_label = QLabel()
+        self.batch_label.setProperty("role", "muted")
+        batch_layout.addWidget(self.batch_label)
+        batch_layout.addStretch(1)
+        self.batch_edit_button = ThemedButton(t("批量编辑"), "soft", "edit")
+        self.batch_edit_button.clicked.connect(self._batch_edit)
+        clear_button = ThemedButton(t("取消选择"), "ghost")
+        clear_button.clicked.connect(self.table.clearSelection)
+        batch_layout.addWidget(self.batch_edit_button)
+        batch_layout.addWidget(clear_button)
+        self.batch_bar.hide()
+        self.body.addWidget(self.batch_bar)
+
         footer = QWidget()
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(4, 0, 4, 2)
@@ -173,6 +197,47 @@ class TransactionsPage(Page):
 
         self.delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.table)
         self.delete_shortcut.activated.connect(self._delete_current)
+        self.table.selectionModel().selectionChanged.connect(self._selection_changed)
+
+    # ------------------------------------------------------------------
+    def _selected_ids(self) -> list[int]:
+        rows = {
+            index.row()
+            for index in self.table.selectionModel().selectedRows()
+        }
+        ids = []
+        for row in sorted(rows):
+            transaction = self.model.transaction_at(row)
+            if transaction:
+                ids.append(transaction.id)
+        return ids
+
+    def _selection_changed(self, *_args) -> None:
+        ids = self._selected_ids()
+        self.batch_bar.setVisible(bool(ids))
+        if ids:
+            self.batch_label.setText(t("已选择 {count} 笔", count=len(ids)))
+
+    def _batch_edit(self) -> None:
+        ids = self._selected_ids()
+        if not ids:
+            return
+        dialog = BulkEditDialog(self.service, ids, self)
+        if dialog.exec():
+            self.reload()
+        self._selection_changed()
+
+    def _undo(self) -> None:
+        try:
+            message = self.service.undo_last()
+        except ValueError as exc:
+            ConfirmDialog.alert(self, t("无法撤销"), str(exc))
+            return
+        self.reload()
+        self.window.notify(message)
+
+    def _update_undo(self) -> None:
+        self.undo_button.setEnabled(self.service.has_undo())
 
     # ------------------------------------------------------------------
     def _load_filter_options(self) -> None:
@@ -248,6 +313,7 @@ class TransactionsPage(Page):
         rows = self.service.repo.transactions(filters)
         balances = self.service.transaction_balances([row.id for row in rows])
         self.model.set_transactions(rows, balances)
+        self.batch_bar.hide()
         count = self.service.repo.count_transactions(filters)
         self.header.set_subtitle(t("共 {count} 笔记录", count=count))
         if rows:
@@ -284,6 +350,7 @@ class TransactionsPage(Page):
         if count > len(rows):
             text += t(" · 仅显示最新 {count} 笔", count=len(rows))
         self.summary.setText(text)
+        self._update_undo()
 
     def refresh(self) -> None:
         self._load_filter_options()

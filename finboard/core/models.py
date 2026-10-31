@@ -121,6 +121,8 @@ class Holding:
     created_at: str = ""
     currency: str = "CNY"
     account_name: str = ""
+    realized_profit: int = 0
+    dividends: int = 0
 
     @property
     def cost_value(self) -> int:
@@ -135,10 +137,20 @@ class Holding:
         return self.market_value - self.cost_value
 
     @property
+    def total_profit(self) -> int:
+        return self.profit + self.realized_profit + self.dividends
+
+    @property
     def return_rate(self) -> float:
         if self.cost_value <= 0:
             return 0.0
         return round(self.profit / self.cost_value * 100, 2)
+
+    @property
+    def total_return_rate(self) -> float:
+        if self.cost_value <= 0:
+            return 0.0
+        return round(self.total_profit / self.cost_value * 100, 2)
 
 
 @dataclass(frozen=True)
@@ -146,16 +158,35 @@ class HoldingsSummary:
     cost: int = 0
     market: int = 0
     count: int = 0
+    realized: int = 0
+    dividends: int = 0
 
     @property
     def profit(self) -> int:
         return self.market - self.cost
 
     @property
+    def total_profit(self) -> int:
+        return self.profit + self.realized + self.dividends
+
+    @property
     def return_rate(self) -> float:
         if self.cost <= 0:
             return 0.0
         return round(self.profit / self.cost * 100, 2)
+
+    @property
+    def total_return_rate(self) -> float:
+        if self.cost <= 0:
+            return 0.0
+        return round(self.total_profit / self.cost * 100, 2)
+
+
+@dataclass(frozen=True)
+class BulkResult:
+    updated: int = 0
+    skipped: int = 0
+    message: str = ""
 
 
 @dataclass(frozen=True)

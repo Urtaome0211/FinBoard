@@ -95,6 +95,33 @@ class ReportsPage(Page):
             stats.addWidget(card, 1)
         self.body.addLayout(stats)
 
+        self.portfolio_card = Card(padding=16, spacing=8)
+        self.portfolio_card.add_header(
+            "投资组合", "持仓市值、成本与累计收益"
+        )
+        portfolio_row = QHBoxLayout()
+        portfolio_row.setSpacing(24)
+        self.market_value = ValueLabel("", tone="primary", size=20, weight=700)
+        self.cost_value = ValueLabel("", tone="text", size=20, weight=700)
+        self.profit_value = ValueLabel("", tone="income", size=20, weight=700)
+        self.dividend_value = ValueLabel("", tone="text", size=20, weight=700)
+        for label, value in (
+            ("持仓市值", self.market_value),
+            ("持仓成本", self.cost_value),
+            ("累计收益", self.profit_value),
+            ("累计分红", self.dividend_value),
+        ):
+            column = QVBoxLayout()
+            column.setSpacing(2)
+            title = QLabel(t(label))
+            title.setProperty("role", "muted")
+            column.addWidget(title)
+            column.addWidget(value)
+            portfolio_row.addLayout(column)
+        portfolio_row.addStretch(1)
+        self.portfolio_card.body.addLayout(portfolio_row)
+        self.body.addWidget(self.portfolio_card)
+
         donuts = QHBoxLayout()
         donuts.setSpacing(18)
         self.worth_card = Card(padding=20, spacing=10)
@@ -181,6 +208,17 @@ class ReportsPage(Page):
             f"{stats.savings_rate:.1f}%",
             hint=t("结余 / 收入"),
             tone="income" if stats.savings_rate >= 20 else ("warning" if stats.savings_rate > 0 else "expense"),
+        )
+
+        holdings = self.service.repo.holdings_summary()
+        self.market_value.setText(money(holdings.market))
+        self.cost_value.setText(money(holdings.cost))
+        self.dividend_value.setText(money(holdings.dividends))
+        self.profit_value.setText(
+            self.service.format(holdings.total_profit, plus=holdings.total_profit > 0)
+        )
+        self.profit_value.set_tone(
+            "income" if holdings.total_profit >= 0 else "expense"
         )
 
         self._refresh_worth(worth, money)
