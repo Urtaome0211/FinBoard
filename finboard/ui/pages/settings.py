@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -445,24 +443,24 @@ class SettingsPage(Page):
             self._report_open_failure(folder)
             return
 
+        # Prefer the shell association. A frozen app running from a folder with
+        # a Low mandatory integrity label cannot start explorer.exe directly:
+        # Windows fails the child with 0xc0000142. ShellExecute works whenever
+        # the app itself runs at the normal Medium integrity level.
         opened = False
-        if sys.platform == "win32":
+        if hasattr(os, "startfile"):
             try:
-                subprocess.Popen(["explorer.exe", str(folder)])
+                os.startfile(str(folder))  # type: ignore[attr-defined]
                 opened = True
             except OSError:
-                try:
-                    os.startfile(str(folder))  # type: ignore[attr-defined]
-                    opened = True
-                except OSError:
-                    opened = False
+                opened = False
         if not opened:
             opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
         if not opened:
             self._report_open_failure(folder)
             return
-        self.window.notify("已打开数据目录")
+        self.window.notify(t("已打开数据目录"))
 
     def _report_open_failure(self, folder: Path) -> None:
         ConfirmDialog.alert(
