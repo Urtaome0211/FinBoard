@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -335,6 +335,38 @@ CREATE INDEX IF NOT EXISTS idx_category_rules_kind
 """
 
 
+SCHEMA_V14 = """
+ALTER TABLE accounts ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS term_deposits (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                   TEXT    NOT NULL,
+    principal              INTEGER NOT NULL CHECK (principal > 0),
+    currency               TEXT    NOT NULL DEFAULT 'CNY',
+    annual_rate_bp         INTEGER NOT NULL CHECK (annual_rate_bp >= 0),
+    term_months            INTEGER NOT NULL CHECK (term_months > 0),
+    start_date             TEXT    NOT NULL,
+    maturity_date          TEXT    NOT NULL,
+    early_rate_bp          INTEGER NOT NULL DEFAULT 20 CHECK (early_rate_bp >= 0),
+    source_account_id      INTEGER NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    deposit_account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    destination_account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    status                 TEXT    NOT NULL DEFAULT 'active'
+                                   CHECK (status IN ('active','closed')),
+    close_reason           TEXT    NOT NULL DEFAULT ''
+                                   CHECK (close_reason IN ('','matured','early')),
+    interest_paid          INTEGER NOT NULL DEFAULT 0 CHECK (interest_paid >= 0),
+    closed_at              TEXT,
+    note                   TEXT    NOT NULL DEFAULT '',
+    created_at             TEXT    NOT NULL,
+    updated_at             TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_term_deposits_status
+    ON term_deposits(status, maturity_date);
+"""
+
+
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
 
@@ -410,6 +442,9 @@ class Database:
         if version < 13:
             conn.executescript(SCHEMA_V13)
             version = 13
+        if version < 14:
+            conn.executescript(SCHEMA_V14)
+            version = 14
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

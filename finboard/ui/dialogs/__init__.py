@@ -7,6 +7,7 @@ from .category_dialog import CategoryDialog
 from .category_manager import CategoryManagerDialog
 from .category_rules import CategoryRulesDialog
 from .csv_import import CsvImportDialog
+from .deposit_dialog import DepositDialog
 from .fixed_asset_dialog import FixedAssetDialog
 from .goal_dialog import GoalDepositDialog, GoalDialog
 from .holdings_dialog import HoldingDialog, HoldingsDialog
@@ -24,6 +25,7 @@ __all__ = [
     "CategoryManagerDialog",
     "CategoryRulesDialog",
     "CsvImportDialog",
+    "DepositDialog",
     "FixedAssetDialog",
     "GoalDepositDialog",
     "GoalDialog",

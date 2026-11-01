@@ -258,6 +258,9 @@ class AccountRow(QFrame):
             parent=self,
         )
         delete = IconButton("trash", t("删除账户"), size=16, parent=self)
+        if account.is_system:
+            for button in (holdings, valuation, reconcile, edit, archive, delete):
+                button.setVisible(False)
         for button in (holdings, valuation, reconcile, edit, archive, delete):
             button.setFixedSize(30, 30)
             actions.addWidget(button)

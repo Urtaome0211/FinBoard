@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Literal
+
+from .money import demand_deposit_interest, term_deposit_interest
 
 TxnKind = Literal["expense", "income", "transfer"]
 CategoryKind = Literal["expense", "income"]
@@ -80,6 +83,7 @@ class Account:
     valuation_count: int = 0
     adjustment: int = 0
     holdings_value: int = 0
+    is_system: bool = False
 
     @property
     def cash_balance(self) -> int:
@@ -220,6 +224,96 @@ class SavingsGoal:
     @property
     def completed(self) -> bool:
         return self.saved_amount >= self.target_amount
+
+
+@dataclass(frozen=True)
+class TermDeposit:
+    """A fixed-term deposit funded from one account and paid back to another."""
+
+    id: int
+    name: str
+    principal: int
+    currency: str
+    annual_rate_bp: int
+    term_months: int
+    start_date: str
+    maturity_date: str
+    early_rate_bp: int
+    source_account_id: int
+    deposit_account_id: int
+    destination_account_id: int
+    status: str = "active"
+    close_reason: str = ""
+    interest_paid: int = 0
+    closed_at: str = ""
+    note: str = ""
+    created_at: str = ""
+    source_account_name: str = ""
+    deposit_account_name: str = ""
+    destination_account_name: str = ""
+
+    @property
+    def is_active(self) -> bool:
+        return self.status == "active"
+
+    @property
+    def is_matured(self) -> bool:
+        if not self.is_active:
+            return False
+        try:
+            return date.today() >= date.fromisoformat(self.maturity_date)
+        except ValueError:
+            return False
+
+    @property
+    def maturity_interest(self) -> int:
+        return term_deposit_interest(
+            self.principal, self.annual_rate_bp, self.term_months
+        )
+
+    @property
+    def annual_rate_text(self) -> str:
+        return f"{self.annual_rate_bp / 100:.2f}%"
+
+    @property
+    def early_rate_text(self) -> str:
+        return f"{self.early_rate_bp / 100:.2f}%"
+
+    @property
+    def elapsed_days(self) -> int:
+        try:
+            return max(
+                0,
+                (date.today() - date.fromisoformat(self.start_date)).days,
+            )
+        except ValueError:
+            return 0
+
+    @property
+    def total_days(self) -> int:
+        try:
+            return max(
+                1,
+                (date.fromisoformat(self.maturity_date) - date.fromisoformat(self.start_date)).days,
+            )
+        except ValueError:
+            return 1
+
+    @property
+    def progress(self) -> float:
+        if not self.is_active:
+            return 100.0
+        return round(min(100.0, self.elapsed_days / self.total_days * 100), 1)
+
+    def early_interest(self, on: str | None = None) -> int:
+        try:
+            start = date.fromisoformat(self.start_date)
+            end = date.fromisoformat(on) if on else date.today()
+        except ValueError:
+            return 0
+        return demand_deposit_interest(
+            self.principal, self.early_rate_bp, (end - start).days
+        )
 
 
 @dataclass(frozen=True)

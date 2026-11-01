@@ -31,6 +31,7 @@ from .models import (
     RecurringTransaction,
     SavingsGoal,
     Tag,
+    TermDeposit,
     TransactionBalance,
     TransactionFilter,
 )
@@ -490,6 +491,23 @@ class FinanceService(QObject):
     def delete_savings_goal(self, goal_id: int) -> None:
         self.repo.delete_savings_goal(goal_id)
         self.changed.emit()
+
+    # ----------------------------------------------------------- term deposits
+    def term_deposits(self, *, include_closed: bool = True) -> list[TermDeposit]:
+        return self.repo.term_deposits(include_closed=include_closed)
+
+    def matured_term_deposits(self) -> list[TermDeposit]:
+        return self.repo.matured_term_deposits()
+
+    def add_term_deposit(self, name: str, principal: int, **fields) -> int:
+        deposit_id = self.repo.add_term_deposit(name, principal, **fields)
+        self.changed.emit()
+        return deposit_id
+
+    def close_term_deposit(self, deposit_id: int, **fields) -> dict[str, object]:
+        result = self.repo.close_term_deposit(deposit_id, **fields)
+        self.changed.emit()
+        return result
 
     # --------------------------------------------------------------- forecast
     def cash_flow_forecast(

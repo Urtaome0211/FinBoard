@@ -17,6 +17,7 @@ from typing import Iterable, Sequence
 
 from .database import Database
 from .dates import (
+    add_months,
     days_in_month,
     month_bounds,
     month_of,
@@ -54,6 +55,7 @@ from .models import (
     RecurringTransaction,
     SavingsGoal,
     Tag,
+    TermDeposit,
     Transaction,
     TransactionBalance,
     TransactionFilter,
@@ -174,6 +176,7 @@ class Repository:
             valuation_count=int(row["valuation_count"] or 0),
             adjustment=int(row["adjustment"] or 0),
             holdings_value=int(row["holdings_value"] or 0),
+            is_system=bool(row["is_system"]) if "is_system" in row.keys() else False,
         )
 
     @staticmethod
@@ -248,7 +251,7 @@ class Repository:
         rows = self.conn.execute(
             f"""
             SELECT a.id, a.name, a.type, a.opening_balance, a.note, a.archived,
-                   a.currency, a.adjustment,
+                   a.currency, a.adjustment, a.is_system,
                    vc.valuation_count AS valuation_count,
                    lv.value AS last_valuation,
                    lv.date AS last_valuation_date,
@@ -758,6 +761,8 @@ class Repository:
         currency: str | None = None,
     ) -> None:
         current = self.get_account(account_id, include_archived=True)
+        if current.is_system:
+            raise ValueError("系统账户由定期存款自动管理，不能手动修改")
         new_name = current.name if name is None else self._clean_name(name, "账户名称", 30)
         new_type = current.type if type_ is None else type_
         if new_type not in ACCOUNT_TYPES:
@@ -809,12 +814,18 @@ class Repository:
         raise ValueError("账户不存在")
 
     def set_account_archived(self, account_id: int, archived: bool) -> None:
+        account = self.get_account(account_id, include_archived=True)
+        if account.is_system:
+            raise ValueError("系统账户由定期存款自动管理，不能归档")
         self.conn.execute(
             "UPDATE accounts SET archived = ? WHERE id = ?", (int(archived), account_id)
         )
         self.conn.commit()
 
     def delete_account(self, account_id: int) -> None:
+        account = self.get_account(account_id, include_archived=True)
+        if account.is_system:
+            raise ValueError("系统账户由定期存款自动管理，不能删除")
         used = self.conn.execute(
             "SELECT COUNT(*) FROM transactions WHERE account_id = ? OR to_account_id = ?",
             (account_id, account_id),
@@ -1371,6 +1382,332 @@ class Repository:
     def delete_savings_goal(self, goal_id: int) -> None:
         self.conn.execute("DELETE FROM savings_goals WHERE id = ?", (goal_id,))
         self.conn.commit()
+
+    # --------------------------------------------------------- term deposits
+    @staticmethod
+    def _term_deposit(row: sqlite3.Row) -> TermDeposit:
+        return TermDeposit(
+            id=int(row["id"]),
+            name=row["name"],
+            principal=int(row["principal"]),
+            currency=row["currency"] or "CNY",
+            annual_rate_bp=int(row["annual_rate_bp"]),
+            term_months=int(row["term_months"]),
+            start_date=row["start_date"],
+            maturity_date=row["maturity_date"],
+            early_rate_bp=int(row["early_rate_bp"]),
+            source_account_id=int(row["source_account_id"]),
+            deposit_account_id=int(row["deposit_account_id"]),
+            destination_account_id=int(row["destination_account_id"]),
+            status=row["status"],
+            close_reason=row["close_reason"] or "",
+            interest_paid=int(row["interest_paid"] or 0),
+            closed_at=row["closed_at"] or "",
+            note=row["note"] or "",
+            created_at=row["created_at"] or "",
+            source_account_name=row["source_account_name"] or "",
+            deposit_account_name=row["deposit_account_name"] or "",
+            destination_account_name=row["destination_account_name"] or "",
+        )
+
+    def deposit_account(self, currency: str) -> Account:
+        """Return (creating if needed) the shared virtual deposit account."""
+        currency = currency or "CNY"
+        if currency not in CURRENCIES:
+            raise ValueError("不支持的币种")
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT id FROM accounts WHERE is_system = 1 AND currency = ?"
+                " ORDER BY id LIMIT 1",
+                (currency,),
+            ).fetchone()
+            if row:
+                return self.get_account(int(row["id"]), include_archived=True)
+            base = "定期存款" if currency == "CNY" else f"定期存款 · {currency}"
+            for name in (base, f"{base}（系统）"):
+                try:
+                    cursor = conn.execute(
+                        "INSERT INTO accounts (name, type, opening_balance, note,"
+                        " archived, currency, is_system, created_at)"
+                        " VALUES (?, 'investment', 0, '系统自动创建的定期存款账户',"
+                        " 0, ?, 1, ?)",
+                        (name, currency, now_iso()),
+                    )
+                    return self.get_account(int(cursor.lastrowid), include_archived=True)
+                except sqlite3.IntegrityError:
+                    continue
+        raise ValueError("无法创建定期存款账户")
+
+    def term_deposits(self, *, include_closed: bool = True) -> list[TermDeposit]:
+        sql = (
+            "SELECT d.*, sa.name AS source_account_name,"
+            " da.name AS deposit_account_name,"
+            " ta.name AS destination_account_name"
+            " FROM term_deposits d"
+            " JOIN accounts sa ON sa.id = d.source_account_id"
+            " JOIN accounts da ON da.id = d.deposit_account_id"
+            " JOIN accounts ta ON ta.id = d.destination_account_id"
+        )
+        if not include_closed:
+            sql += " WHERE d.status = 'active'"
+        sql += (
+            " ORDER BY CASE d.status WHEN 'active' THEN 0 ELSE 1 END,"
+            " d.maturity_date, d.id"
+        )
+        return [self._term_deposit(row) for row in self.conn.execute(sql)]
+
+    def get_term_deposit(self, deposit_id: int) -> TermDeposit:
+        row = self.conn.execute(
+            "SELECT d.*, sa.name AS source_account_name,"
+            " da.name AS deposit_account_name,"
+            " ta.name AS destination_account_name"
+            " FROM term_deposits d"
+            " JOIN accounts sa ON sa.id = d.source_account_id"
+            " JOIN accounts da ON da.id = d.deposit_account_id"
+            " JOIN accounts ta ON ta.id = d.destination_account_id"
+            " WHERE d.id = ?",
+            (deposit_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("定期存款不存在")
+        return self._term_deposit(row)
+
+    def _validate_deposit_accounts(
+        self, source: Account, destination: Account, currency: str
+    ) -> None:
+        for account in (source, destination):
+            if account.is_system:
+                raise ValueError("请选择普通账户，不能使用系统存款账户")
+            if account.type not in ("cash", "debit", "investment"):
+                raise ValueError("只能从现金、储蓄或投资账户存入")
+            if account.currency != currency:
+                raise ValueError("存款币种必须与账户币种一致")
+
+    def add_term_deposit(
+        self,
+        name: str,
+        principal: int,
+        currency: str,
+        annual_rate_bp: int,
+        term_months: int,
+        start_date: str,
+        early_rate_bp: int,
+        source_account_id: int,
+        destination_account_id: int,
+        *,
+        note: str = "",
+    ) -> int:
+        name = self._clean_name(name, "存款名称", 60)
+        principal = int(principal)
+        annual_rate_bp = int(annual_rate_bp)
+        term_months = int(term_months)
+        early_rate_bp = int(early_rate_bp)
+        if principal <= 0 or principal > MAX_AMOUNT_CENTS:
+            raise ValueError("存款金额必须大于 0")
+        if currency not in CURRENCIES:
+            raise ValueError("不支持的币种")
+        if not 0 <= annual_rate_bp <= 10_000:
+            raise ValueError("年利率应在 0% 到 100% 之间")
+        if not 1 <= term_months <= 600:
+            raise ValueError("存款期限应在 1 到 600 个月之间")
+        if not 0 <= early_rate_bp <= 10_000:
+            raise ValueError("活期利率应在 0% 到 100% 之间")
+        start = normalize_day(start_date) if start_date else today_iso()
+        maturity = add_months(start, term_months)
+        source = self.get_account(source_account_id)
+        destination = self.get_account(destination_account_id)
+        self._validate_deposit_accounts(source, destination, currency)
+        if source.cash_balance < principal:
+            raise ValueError("转出账户余额不足")
+        account = self.deposit_account(currency)
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
+                "INSERT INTO term_deposits (name, principal, currency,"
+                " annual_rate_bp, term_months, start_date, maturity_date,"
+                " early_rate_bp, source_account_id, deposit_account_id,"
+                " destination_account_id, status, note, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)",
+                (
+                    name,
+                    principal,
+                    currency,
+                    annual_rate_bp,
+                    term_months,
+                    start,
+                    maturity,
+                    early_rate_bp,
+                    source.id,
+                    account.id,
+                    destination.id,
+                    str(note or "").strip()[:200],
+                    now_iso(),
+                ),
+            )
+            deposit_id = int(cursor.lastrowid)
+            self._insert_internal_transfer(
+                conn,
+                day=start,
+                amount=principal,
+                currency=currency,
+                from_account_id=source.id,
+                to_account_id=account.id,
+                note=f"存入定期：{name}",
+            )
+        return deposit_id
+
+    def close_term_deposit(
+        self,
+        deposit_id: int,
+        *,
+        destination_account_id: int | None = None,
+        on: str | None = None,
+        reason: str | None = None,
+    ) -> dict[str, object]:
+        deposit = self.get_term_deposit(deposit_id)
+        if not deposit.is_active:
+            raise ValueError("该定期存款已支取")
+        account_id = destination_account_id or deposit.destination_account_id
+        destination = self.get_account(account_id)
+        self._validate_deposit_accounts(
+            self.get_account(deposit.source_account_id), destination, deposit.currency
+        )
+        as_of = normalize_day(on) if on else today_iso()
+        if as_of < deposit.start_date:
+            raise ValueError("支取日期不能早于存入日期")
+        matured = as_of >= deposit.maturity_date
+        close_reason = reason or ("matured" if matured else "early")
+        if close_reason not in ("matured", "early"):
+            raise ValueError("支取方式无效")
+        interest = (
+            deposit.maturity_interest
+            if close_reason == "matured"
+            else deposit.early_interest(as_of)
+        )
+        virtual = self.get_account(deposit.deposit_account_id, include_archived=True)
+        if virtual.cash_balance < deposit.principal:
+            raise ValueError("存款账户余额不足，可能已被其他记录占用")
+        category = self.find_category("利息收入", "income")
+        with self.db.transaction() as conn:
+            transfer_id = self._insert_internal_transfer(
+                conn,
+                day=as_of,
+                amount=deposit.principal,
+                currency=deposit.currency,
+                from_account_id=deposit.deposit_account_id,
+                to_account_id=destination.id,
+                note=(
+                    f"到期支取：{deposit.name}"
+                    if close_reason == "matured"
+                    else f"提前支取：{deposit.name}"
+                ),
+            )
+            income_id = None
+            if interest > 0:
+                if category is None:
+                    cursor = conn.execute(
+                        "INSERT INTO categories (name, kind, color, created_at)"
+                        " VALUES ('利息收入', 'income', '#2F9E6E', ?)",
+                        (now_iso(),),
+                    )
+                    category_id = int(cursor.lastrowid)
+                else:
+                    category_id = category.id
+                income_id = self._insert_income(
+                    conn,
+                    day=as_of,
+                    amount=interest,
+                    currency=deposit.currency,
+                    account_id=destination.id,
+                    category_id=category_id,
+                    payee=deposit.name,
+                    note="定期存款利息",
+                )
+            conn.execute(
+                "UPDATE term_deposits SET status = 'closed', close_reason = ?,"
+                " interest_paid = ?, closed_at = ?, updated_at = ? WHERE id = ?",
+                (close_reason, interest, as_of, now_iso(), deposit.id),
+            )
+        return {
+            "deposit": deposit,
+            "interest": interest,
+            "total": deposit.principal + interest,
+            "reason": close_reason,
+            "transfer_id": transfer_id,
+            "income_id": income_id,
+            "date": as_of,
+        }
+
+    @staticmethod
+    def _insert_internal_transfer(
+        conn: sqlite3.Connection,
+        *,
+        day: str,
+        amount: int,
+        currency: str,
+        from_account_id: int,
+        to_account_id: int,
+        note: str,
+    ) -> int:
+        cursor = conn.execute(
+            "INSERT INTO transactions (date, kind, amount, currency,"
+            " account_amount, to_amount, fee, fee_waived, fee_included,"
+            " recurring_id, refund_of_id, category_id, account_id,"
+            " to_account_id, payee, note, import_hash, created_at)"
+            " VALUES (?, 'transfer', ?, ?, ?, ?, 0, 0, 0, NULL, NULL, NULL,"
+            " ?, ?, '', ?, NULL, ?)",
+            (
+                day,
+                amount,
+                currency,
+                amount,
+                amount,
+                from_account_id,
+                to_account_id,
+                note,
+                now_iso(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    @staticmethod
+    def _insert_income(
+        conn: sqlite3.Connection,
+        *,
+        day: str,
+        amount: int,
+        currency: str,
+        account_id: int,
+        category_id: int,
+        payee: str,
+        note: str,
+    ) -> int:
+        cursor = conn.execute(
+            "INSERT INTO transactions (date, kind, amount, currency,"
+            " account_amount, to_amount, fee, fee_waived, fee_included,"
+            " recurring_id, refund_of_id, category_id, account_id,"
+            " to_account_id, payee, note, import_hash, created_at)"
+            " VALUES (?, 'income', ?, ?, ?, 0, 0, 0, 0, NULL, NULL, ?, ?,"
+            " NULL, ?, ?, NULL, ?)",
+            (
+                day,
+                amount,
+                currency,
+                amount,
+                category_id,
+                account_id,
+                payee,
+                note,
+                now_iso(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def matured_term_deposits(self) -> list[TermDeposit]:
+        return [
+            deposit
+            for deposit in self.term_deposits(include_closed=False)
+            if deposit.is_matured
+        ]
 
     # ------------------------------------------------------------- categories
     def categories(self, kind: str | None = None) -> list[Category]:
@@ -3406,6 +3743,7 @@ class Repository:
     def clear_all(self, *, seed_defaults: bool = True) -> None:
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM transactions")
+            conn.execute("DELETE FROM term_deposits")
             conn.execute("DELETE FROM category_rules")
             conn.execute("DELETE FROM undo_log")
             conn.execute("DELETE FROM budgets")
@@ -3415,7 +3753,7 @@ class Repository:
             conn.execute(
                 "DELETE FROM sqlite_sequence WHERE name IN"
                 " ('transactions','budgets','accounts','categories',"
-                "  'category_rules','undo_log')"
+                "  'category_rules','undo_log','term_deposits')"
             )
             if seed_defaults:
                 Database._seed_defaults(conn)

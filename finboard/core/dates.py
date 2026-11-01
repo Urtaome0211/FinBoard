@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import calendar
 
 from ..i18n import is_english, month_name, weekday_name
 
@@ -97,6 +98,16 @@ def shift_month(month: str, delta: int) -> str:
     index = year * 12 + (month_number - 1) + int(delta)
     new_year, new_month = divmod(index, 12)
     return f"{new_year:04d}-{new_month + 1:02d}"
+
+
+def add_months(day: str | date, months: int) -> str:
+    """Add calendar months, clamping the day to the target month end."""
+    current = day if isinstance(day, date) else parse_iso_day(day)
+    index = current.year * 12 + (current.month - 1) + int(months)
+    year, month0 = divmod(index, 12)
+    month = month0 + 1
+    day_number = min(current.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day_number).isoformat()
 
 
 def recent_months(count: int, end_month: str | None = None) -> list[str]:

@@ -31,7 +31,7 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 - **账户对账**：输入银行或钱包显示的账单余额，程序计算差额并写入账户校准；不会生成收支记录，可删除对账历史撤销调整；投资账户请使用市值快照。
 - **投资持仓与现金**：为投资账户登记股票、基金或 ETF 的数量、成本价和现价，自动计算成本、市值、浮动盈亏与收益率；持仓之外可单独填写现金，账户总值 = 现金 + 持仓市值，可一键按总值校准账户；已实现收益、累计分红计入累计收益。
 - **预算结转**：勾选「结转到下月」后，本月未用完的正预算会带入下月；超支不结转，明细页显示结转额与可用预算。
-- **储蓄目标**：为目标设定金额、已存金额和可选日期，显示进度、剩余与达成状态，支持随时存入或取出。
+- **储蓄**：定期存款记录本金、年利率、期限、到期日、活期利率和到期转入账户；存入时从账户转出并同步余额，到期或提前支取时按规则计息、本金转回指定账户、利息单独记收入；储蓄目标继续保留。
 - **现金流预测**：按定期交易和最近 3 个月的非定期收支，预测未来 3/6/12 个月的收入、支出、净现金流和期末现金。
 - **汇率**：每日自动检查一次，也可在设置页手动刷新；数据来自 Frankfurter（欧洲央行参考汇率），缓存在本地，离线时继续使用最后一次汇率。
 - **预算**：按月设置总预算和分类预算，实时显示已用、剩余、使用率；超支时用红色提示；可开启跨月结转。
@@ -174,7 +174,7 @@ dist\FinBoard\FinBoard.exe --version
 9. **备份数据**：在「设置 → 数据」中备份数据库或导出 CSV。CSV 也可用于从其他软件迁移数据。
 10. **切换语言**：在「设置 → 语言」选择「中文」或「English」，切换立即生效并记住选择；默认中文。也可以在启动时用 `--language en` 临时指定。
 11. **登记持仓与现金**：在投资账户行点「持仓」图标，添加名称、代码、数量、成本价和现价；点「调整现金」填写未投入持仓的现金，账户总值会按「现金 + 持仓市值」显示；点「按市值校准账户」把账户总值写成当天的市值快照。
-12. **设储蓄目标**：在「储蓄」页新建目标，填写目标金额、已存金额和可选日期；在目标行点「+」存入，点铅笔编辑，点垃圾桶删除。
+12. **储蓄**：在「储蓄」页新建定期存款，填写本金、年利率、期限、存入日期、活期利率、转出账户和到期转入账户；到期后在列表点「确认支取」，提前支取按活期利率计息。也可以继续新建储蓄目标。
 13. **看现金流预测**：在「预测」页选择未来 3/6/12 个月，查看预测曲线和逐月表；期初现金只算现金/储蓄卡账户，定期收支按计划日期投影，转账不计入。
 14. **登记固定资产**：在「固定资产」页新增房产、车辆或其他长期资产，填写购买价、当前估值和估值日期；估值只影响总资产/净资产与结构环图，不生成收支、不进入预算和现金流预测。
 
@@ -273,6 +273,8 @@ tests/test_v21_ui.py        # 持仓/储蓄目标对话框
 tests/test_v30.py           # schema v10、拆分/标签/附件、CSV 规则、Excel 导出
 tests/test_v40.py           # 持仓已实现收益/分红、批量编辑与撤销
 tests/test_v41.py           # 固定资产 CRUD、估值折算与净值
+tests/test_v42.py           # 退款、撤销、分类规则与备份恢复
+tests/test_v43.py           # 定期存款、利息、支取与系统账户
 scripts/                    # 冒烟、截图、图标生成
 docs/                       # 截图与 logo
 run.py                      # 源码入口
@@ -292,6 +294,7 @@ FinBoard.spec               # PyInstaller 构建配置
 - **退款净额**：退款仍是一条 `income` 记录，但带有 `refund_of_id` 指向原支出；月度统计、趋势、分类报表和现金流预测会把退款从支出中扣减，而不会把它算作收入，从而避免收入与支出同时虚增。
 - **自动分类**：`category_rules` 用 `lower(pattern) + kind` 唯一约束保存关键词，匹配时按 `casefold` 包含、最长关键词优先；新建交易时只提示并预填，命中计数与标签回填都是显式操作。
 - **备份与恢复**：启动时先执行 `PRAGMA quick_check`，超过 20 小时未备份则用 SQLite 在线备份写入 `backups/`，默认保留 10 份；恢复前会先为当前数据库创建一份安全快照，并校验目标库的 schema 版本与完整性。
+- **定期存款**：每个币种一个 `is_system=1` 的虚拟投资账户，存款时从源账户转入该账户，到期或提前支取时再转回目标账户；定期利息按 `本金 × 年利率 × 月数 / 12`、提前支取按 `本金 × 活期利率 × 持有天数 / 365` 用整数分计算，利息记入「利息收入」分类，不改写本金交易。
 - **持仓与现金**：`holdings` 用百万分之一股存储数量，成本/市值/盈亏全部用整数分计算；投资账户没有市值快照时，余额 = 现金 + 持仓市值。现金通过 `accounts.adjustment` 校准，不写收支；「按市值校准」会把现金和持仓合计写成当天估值。
 - **预算结转**：只有上个月开启 rollover 且剩余为正时才带入下月，逐月递归；超支归零，避免负预算继续扩张。
 - **现金流预测**：期初现金只含现金/储蓄卡账户；非定期收支取近 3 个完整月均值，定期规则按 `next_date` 逐次投影；转账不计入。
@@ -302,7 +305,7 @@ FinBoard.spec               # PyInstaller 构建配置
 ### 测试与构建
 
 ```bash
-# 单元测试（116 个）
+# 单元测试（123 个）
 python -m unittest discover -s tests
 
 # 核心冒烟（临时数据库、演示数据、CSV 往返）
@@ -332,6 +335,7 @@ python -m PyInstaller FinBoard.spec --noconfirm --clean
 - 自动分类规则按付款对象包含关键词匹配，多个规则命中时取最长关键词；规则只在新建或编辑交易时提示，不会静默改写已保存的交易，标签回填需手动触发。
 - 自动备份默认开启，最多保留 10 份数据库快照，启动时超过 20 小时未备份才会创建；备份只含数据库，附件仍需另行备份 `attachments/`。
 - 撤销日志最多保留最近 100 步，覆盖新增、编辑、删除、标签/拆分修改和批量修改；重启后仍可撤销，但清空数据库会一并清除。
+- 定期存款每个币种共用一个自动创建的「定期存款」系统账户，不支持部分支取或自动续存；提前支取使用建单时填写的活期利率，系统账户不能手动编辑、归档或删除。
 - 单用户、单机；没有登录、加密或云同步。
 - 预算按自然月设置；只有勾选「结转到下月」的预算才会把正剩余带入下月，超支不结转。
 - 不直接连接银行/支付宝/微信账单，需通过 CSV 导入；自定义 CSV 规则只在导入时使用，不改变原始文件。
@@ -368,7 +372,7 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 - **Account reconciliation**: enter the statement balance from a bank or wallet; FinBoard calculates the difference and writes a balance adjustment without creating income/expense rows. Delete a reconciliation to undo it; investment accounts use valuation snapshots instead.
 - **Holdings & cash**: record quantity, cost price and current price for stocks, funds or ETFs; FinBoard calculates cost basis, market value, unrealized P/L and return. Cash not invested in holdings can be entered separately, and the account total is cash plus holdings market value. A button revalues the account with that total. Realized gains and dividends are included in the total return.
 - **Budget rollover**: with “Roll over to next month” enabled, unused positive budget carries into the next month; overspending does not.
-- **Savings goals**: set a target, saved amount and optional date; track progress, remaining amount and completion, and deposit or withdraw at any time.
+- **Savings**: fixed-term deposits track principal, annual rate, term, maturity date, demand rate and a maturity account. A deposit moves money out of the source account; at maturity or early withdrawal, interest is calculated and principal returns to the chosen account, with interest recorded as income. Savings goals remain available.
 - **Cash-flow forecast**: project income, expenses, net cash flow and ending cash for the next 3/6/12 months from recurring rules and the last 3 months of non-recurring activity.
 - **Rates**: one automatic check per day plus a manual refresh in Settings. Data comes from Frankfurter (ECB reference rates) and is cached locally, so offline use keeps the last known rates.
 - **Budgets**: per-month overall and per-category limits, with spent/remaining/usage, over-budget warnings and optional rollover (only positive unused amounts carry).
@@ -505,7 +509,7 @@ dist\FinBoard\FinBoard.exe --version
 9. **Back up** from Settings → Data (database copy or CSV export).
 10. **Switch language** in Settings → Language (中文 / English). The change is immediate and remembered; Chinese is the default. `--language en` overrides it for one launch.
 11. **Track holdings and cash** from the chart icon on an investment account: add name, symbol, quantity, cost price and current price. Use “Adjust cash” for uninvested cash; the account total is cash plus holdings. Review cost/market value/P&L, then click “Revalue account” to write the total as today’s valuation snapshot.
-12. **Set a savings goal** on the Savings page: enter a target, saved amount and optional date. Use “+” to deposit, the pencil to edit and the trash icon to delete.
+12. **Savings** on the Savings page: create a fixed-term deposit with principal, annual rate, term, start date, demand rate, source account and maturity account. Confirm the withdrawal when it matures; early withdrawal earns the demand rate. Savings goals are still available.
 13. **Review the cash-flow forecast** on the Forecast page for the next 3/6/12 months. Starting cash includes only cash/debit accounts; recurring rules project on their scheduled dates and transfers are excluded.
 14. **Register fixed assets** on the Fixed assets page: name, type, purchase price, current value and valuation date. Valuations affect total assets/net worth and the structure donut only; they never create income/expense rows and are excluded from budgets and forecasts.
 
@@ -573,7 +577,7 @@ Default location on Windows:
 ### Testing & build
 
 ```bash
-# 116 unit tests
+# 123 unit tests
 python -m unittest discover -s tests
 
 # Core smoke test (temporary DB, demo data, CSV round-trip)
@@ -603,6 +607,7 @@ Output: `dist/FinBoard/FinBoard.exe` (one-dir; ship the whole folder).
 - Automatic rules match by keyword contained in the payee; the longest matching keyword wins. Rules only suggest and prefill when creating or editing a transaction; saved transactions are never rewritten silently, and tag backfilling is manual.
 - Automatic backup is enabled by default and keeps up to 10 database snapshots. A backup is created at startup only when the newest one is more than 20 hours old. Backups contain the database only; back up `attachments/` separately.
 - The undo log keeps the last 100 actions (new, edit, delete, tag/split change and bulk edit). It survives restarts but is cleared with a full reset.
+- Fixed-term deposits share one auto-created system account per currency. Partial withdrawals and auto-renewal are not supported; early withdrawal uses the demand rate entered when the deposit was created, and the system account cannot be edited, archived or deleted manually.
 - Single-user, single-machine: no login, encryption or cloud sync.
 - Budgets are per calendar month and roll over only when explicitly enabled; overspending never rolls over.
 - No direct bank/Alipay/WeChat sync; use CSV import. Custom CSV rules are used only during import and never modify the source file.

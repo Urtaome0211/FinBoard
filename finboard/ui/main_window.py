@@ -166,6 +166,7 @@ class MainWindow(QMainWindow):
         self.toast_timer.timeout.connect(self.toast.hide)
 
         self.navigate("dashboard")
+        QTimer.singleShot(800, self._remind_matured_deposits)
 
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
@@ -390,6 +391,19 @@ class MainWindow(QMainWindow):
         dialog = TransactionDialog(self.service, transaction, parent=self)
         localize_widgets(dialog)
         dialog.exec()
+
+    def _remind_matured_deposits(self) -> None:
+        try:
+            matured = self.service.matured_term_deposits()
+        except Exception:
+            return
+        if matured:
+            self.notify(
+                t(
+                    "有 {count} 笔定期存款已到期，请确认支取。",
+                    count=len(matured),
+                )
+            )
 
     def undo_last(self) -> None:
         try:

@@ -126,6 +126,59 @@ def format_signed_cents(cents: int, symbol: str = "¥") -> str:
     return format_cents(cents, symbol, plus=True)
 
 
+def parse_rate_bp(value: str | int | Decimal) -> int:
+    """Parse a percentage (``3.25`` or ``3.25%``) into basis points."""
+    if isinstance(value, bool):
+        raise ValueError("利率格式不正确")
+    if value is None:
+        raise ValueError("请输入利率")
+    text = unicodedata.normalize("NFKC", str(value)).strip()
+    cleaned = text.replace("%", "").replace("％", "").replace(" ", "")
+    if not cleaned:
+        raise ValueError("请输入利率")
+    try:
+        rate = Decimal(cleaned)
+    except InvalidOperation:
+        raise ValueError("利率格式不正确") from None
+    if not rate.is_finite() or rate < 0 or rate > 100:
+        raise ValueError("年利率应在 0% 到 100% 之间")
+    bp = int((rate * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if bp > 10_000:
+        raise ValueError("年利率应在 0% 到 100% 之间")
+    return bp
+
+
+def format_rate_bp(basis_points: int) -> str:
+    """Format basis points as a percentage string."""
+    return f"{int(basis_points) / 100:.2f}%"
+
+
+def term_deposit_interest(
+    principal: int, annual_rate_bp: int, term_months: int
+) -> int:
+    """Simple interest for a fixed term, rounded to the nearest cent."""
+    principal = int(principal)
+    annual_rate_bp = int(annual_rate_bp)
+    term_months = int(term_months)
+    if principal <= 0 or annual_rate_bp <= 0 or term_months <= 0:
+        return 0
+    numerator = principal * annual_rate_bp * term_months
+    denominator = 10_000 * 12
+    return (numerator + denominator // 2) // denominator
+
+
+def demand_deposit_interest(principal: int, annual_rate_bp: int, days: int) -> int:
+    """Simple demand-rate interest for actual days held, rounded to cents."""
+    principal = int(principal)
+    annual_rate_bp = int(annual_rate_bp)
+    days = max(0, int(days))
+    if principal <= 0 or annual_rate_bp <= 0 or days <= 0:
+        return 0
+    numerator = principal * annual_rate_bp * days
+    denominator = 10_000 * 365
+    return (numerator + denominator // 2) // denominator
+
+
 def format_compact(cents: int, symbol: str = "¥") -> str:
     """Compact Chinese-style amount for chart axes: ``1.8万`` / ``860``."""
     value = abs(int(cents)) / 100
