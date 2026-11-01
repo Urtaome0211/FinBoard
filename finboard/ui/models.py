@@ -48,7 +48,10 @@ class TransactionTableModel(QAbstractTableModel):
             if column == 1:
                 return t(KIND_LABELS.get(txn.kind, txn.kind))
             if column == 2:
-                return t(txn.title)
+                title = t(txn.title)
+                if txn.is_refund:
+                    return t("退款 · {title}", title=title)
+                return title
             if column == 3:
                 return category_display(txn.category_name) if txn.category_name else "—"
             if column == 4:
@@ -137,10 +140,14 @@ class TransactionTableModel(QAbstractTableModel):
             if txn.kind == "transfer" and txn.fee:
                 detail += (
                     f"\n手续费 {self.service.format_money(txn.fee, txn.account_currency)}"
-                    + ("（包含在提现金额中）" if txn.fee_included else "（从转出账户扣除）")
+                    + (
+                        t("（包含在提现金额中）")
+                        if txn.fee_included
+                        else t("（从转出账户扣除）")
+                    )
                 )
             elif txn.kind == "transfer" and txn.fee_waived:
-                detail += "\n手续费 已豁免"
+                detail += "\n" + t("手续费 已豁免")
             balance = self._balances.get(txn.id)
             if balance is not None:
                 detail += (

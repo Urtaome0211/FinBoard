@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
 from ... import __app_name__, __app_name_cn__, __version__
 from ...i18n import currency_display, language, t
 from ...core.money import CURRENCIES
-from ..dialogs import CategoryManagerDialog, CsvImportDialog
+from ..dialogs import CategoryManagerDialog, CategoryRulesDialog, CsvImportDialog
+from ..localize import localize_widgets
 from ..theme import theme_mode, theme_store
 from ..widgets import (
     Card,
@@ -199,6 +200,15 @@ class SettingsPage(Page):
         manage.clicked.connect(self._manage_categories)
         row.addWidget(manage)
         card.body.addLayout(row)
+
+        rules_row = self._row(
+            "自动分类规则",
+            "按付款对象匹配分类与标签，可在记账时自动填充，也可从历史记录学习。",
+        )
+        rules = ThemedButton("管理规则", "secondary", "sparkles")
+        rules.clicked.connect(self._manage_rules)
+        rules_row.addWidget(rules)
+        card.body.addLayout(rules_row)
         self.body.addWidget(card)
 
     def _build_data(self) -> None:
@@ -229,6 +239,38 @@ class SettingsPage(Page):
         actions.addStretch(1)
         card.body.addLayout(actions)
 
+        auto_row = self._row(
+            "自动备份",
+            "启动时检查数据库完整性，并在超过 20 小时未备份时自动创建快照。",
+        )
+        self.backup_auto = SegmentedControl(
+            [("启用", True), ("停用", False)],
+            bool(self.window.settings.value("backup/auto", True, type=bool)),
+        )
+        self.backup_auto.setFixedWidth(180)
+        self.backup_auto.changed.connect(self._backup_auto_changed)
+        auto_row.addWidget(self.backup_auto)
+        card.body.addLayout(auto_row)
+
+        self.backup_label = QLabel()
+        self.backup_label.setProperty("role", "faint")
+        self.backup_label.setWordWrap(True)
+        card.body.addWidget(self.backup_label)
+
+        backup_actions = QHBoxLayout()
+        backup_actions.setSpacing(10)
+        backup_now = ThemedButton("立即备份", "soft", "shield")
+        restore = ThemedButton("从备份恢复…", "ghost", "database")
+        check = ThemedButton("检查完整性", "ghost", "check")
+        backup_now.clicked.connect(self._backup_now)
+        restore.clicked.connect(self._restore_backup)
+        check.clicked.connect(self._check_integrity)
+        backup_actions.addWidget(backup_now)
+        backup_actions.addWidget(restore)
+        backup_actions.addWidget(check)
+        backup_actions.addStretch(1)
+        card.body.addLayout(backup_actions)
+
         hint = QLabel(
             "导入按「日期,类型,金额,分类,账户,转入账户,对方,备注」表头解析，"
             "支持 UTF-8 与 GB18030 编码；无法识别的行会被跳过并给出原因。"
@@ -236,6 +278,7 @@ class SettingsPage(Page):
         hint.setProperty("role", "faint")
         hint.setWordWrap(True)
         card.body.addWidget(hint)
+        self._update_backup_label()
         self.body.addWidget(card)
 
     def _build_about(self) -> None:
@@ -275,7 +318,8 @@ class SettingsPage(Page):
         meta.setProperty("role", "faint")
         about.body.addWidget(meta)
         shortcuts = QLabel(
-            "快捷键：Ctrl+N 记一笔 · Ctrl+F 搜索 · Ctrl+1…5 切换页面 · Ctrl+, 设置"
+            "快捷键：Ctrl+N 记一笔 · Ctrl+F 搜索 · Ctrl+Z 撤销上一步 · "
+            "Ctrl+1…5 切换页面 · Ctrl+, 设置"
         )
         shortcuts.setProperty("role", "faint")
         shortcuts.setWordWrap(True)
@@ -290,6 +334,7 @@ class SettingsPage(Page):
             self.currency_combo.setCurrentIndex(index)
             self.currency_combo.blockSignals(False)
         self._update_rate_labels()
+        self._update_backup_label()
 
     def _sync_theme(self) -> None:
         mode = theme_mode()
@@ -307,6 +352,85 @@ class SettingsPage(Page):
 
     def _manage_categories(self) -> None:
         CategoryManagerDialog(self.service, self.window).exec()
+
+    def _manage_rules(self) -> None:
+        dialog = CategoryRulesDialog(self.service, self.window)
+        localize_widgets(dialog)
+        dialog.exec()
+
+    def _backup_auto_changed(self, value: object) -> None:
+        self.window.settings.setValue("backup/auto", bool(value))
+        self.window.settings.sync()
+
+    def _update_backup_label(self) -> None:
+        try:
+            backups = self.service.backups()
+        except OSError:
+            backups = []
+        if not backups:
+            self.backup_label.setText(t("最近备份：尚无自动备份"))
+            return
+        latest = backups[0]
+        stamp = datetime.fromtimestamp(latest.stat().st_mtime).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        self.backup_label.setText(
+            t("最近备份：{name} · {time}", name=latest.name, time=stamp)
+        )
+
+    def _backup_now(self) -> None:
+        try:
+            target = self.service.create_backup(keep=10)
+        except (OSError, ValueError) as exc:
+            ConfirmDialog.alert(self, "备份失败", str(exc), icon_name="alert")
+            return
+        self._update_backup_label()
+        self.window.notify(t("备份已创建：{name}", name=target.name))
+
+    def _restore_backup(self) -> None:
+        try:
+            backups = self.service.backups()
+        except OSError:
+            backups = []
+        folder = backups[0].parent if backups else self.data_folder
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "从备份恢复", str(folder), "SQLite 数据库 (*.db)"
+        )
+        if not path:
+            return
+        if not ConfirmDialog.confirm(
+            self,
+            "从备份恢复？",
+            "当前数据库会被所选备份覆盖。恢复前会自动为当前数据创建一份快照。",
+            ok_text="恢复",
+            danger=True,
+            icon_name="database",
+        ):
+            return
+        try:
+            self.service.restore_backup(path)
+        except (OSError, ValueError) as exc:
+            ConfirmDialog.alert(self, "恢复失败", str(exc), icon_name="alert")
+            return
+        self._update_backup_label()
+        self.window.refresh_all()
+        self.window.notify(t("已从备份恢复"))
+
+    def _check_integrity(self) -> None:
+        try:
+            ok, detail = self.service.check_integrity()
+        except (OSError, ValueError) as exc:
+            ConfirmDialog.alert(self, "检查失败", str(exc), icon_name="alert")
+            return
+        if ok:
+            self.window.notify(t("数据库检查通过"))
+            return
+        ConfirmDialog.alert(
+            self,
+            "数据库检查失败",
+            detail or t("数据库完整性检查未通过。"),
+            icon_name="alert",
+        )
 
     def _open_data_dir(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.data_folder)))

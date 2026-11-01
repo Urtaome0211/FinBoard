@@ -350,6 +350,7 @@ class Transaction:
     fee_waived: bool = False
     fee_included: bool = False
     recurring_id: int | None = None
+    refund_of_id: int | None = None
     account_currency: str = "CNY"
     to_account_currency: str = "CNY"
     import_hash: str = ""
@@ -388,6 +389,10 @@ class Transaction:
     @property
     def tag_names(self) -> list[str]:
         return [tag.name for tag in self.tags]
+
+    @property
+    def is_refund(self) -> bool:
+        return self.refund_of_id is not None
 
 
 @dataclass(frozen=True)
@@ -511,6 +516,25 @@ class PayeeSpend:
     payee: str
     amount: int
     count: int
+
+
+@dataclass(frozen=True)
+class CategoryRule:
+    """A payee keyword that fills the category (and tags) automatically."""
+
+    id: int
+    pattern: str
+    kind: str
+    category_id: int
+    category_name: str = ""
+    category_color: str = ""
+    tags: tuple[str, ...] = ()
+    hit_count: int = 0
+    created_at: str = ""
+
+    @property
+    def tag_text(self) -> str:
+        return "、".join(self.tags)
 
 
 @dataclass

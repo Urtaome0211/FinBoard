@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from ...core.fees import withdrawal_rule
 from ...i18n import currency_display, t
-from ...core.models import Transaction
+from ...core.models import Transaction, TransactionFilter
 from ...core.money import CURRENCIES, parse_amount
 from ...core.rates import RateError
 from ...core.service import FinanceService
@@ -39,17 +39,27 @@ class TransactionDialog(QDialog):
         transaction: Transaction | None = None,
         *,
         default_kind: str = "expense",
+        refund_of: Transaction | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.service = service
         self.transaction = transaction
+        self._refund_target = refund_of
+        self._rule = None
+        self._rule_tags: list[str] = []
+        self._category_touched = bool(transaction)
+        self._applying_rule = False
         self.setWindowTitle(t("编辑记录") if transaction else t("记一笔"))
         self.setModal(True)
         self.setMinimumWidth(570)
         self.setSizeGripEnabled(False)
 
-        kind = transaction.kind if transaction else default_kind
+        kind = (
+            transaction.kind
+            if transaction
+            else ("income" if refund_of is not None else default_kind)
+        )
         layout = root_layout(self)
         layout.setContentsMargins(24, 20, 24, 18)
         layout.setSpacing(12)
@@ -123,6 +133,19 @@ class TransactionDialog(QDialog):
         self.category_combo = QComboBox()
         self.form.addRow(self.category_label, self.category_combo)
 
+        self.refund_check = QCheckBox(t("这是一笔退款（关联原支出）"))
+        self.refund_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refund_check.toggled.connect(self._refund_toggled)
+        self.form.addRow("", self.refund_check)
+        self.refund_label = form_label(t("原支出"))
+        self.refund_combo = QComboBox()
+        self.refund_combo.setMinimumWidth(320)
+        self.refund_combo.setProperty("i18nSkip", True)
+        self.form.addRow(self.refund_label, self.refund_combo)
+        self.refund_label.hide()
+        self.refund_combo.hide()
+        self.refund_check.hide()
+
         self.to_label = form_label(t("转入账户"))
         self.to_combo = QComboBox()
         self.to_combo.setProperty("i18nSkip", True)
@@ -158,6 +181,12 @@ class TransactionDialog(QDialog):
         self.note_input.setMaxLength(200)
         self.form.addRow(form_label(t("备注")), self.note_input)
         layout.addLayout(self.form)
+
+        self.rule_hint = QLabel()
+        self.rule_hint.setProperty("role", "faint")
+        self.rule_hint.setWordWrap(True)
+        self.rule_hint.hide()
+        layout.addWidget(self.rule_hint)
 
         self.preview = QLabel()
         self.preview.setProperty("role", "faint")
@@ -196,6 +225,11 @@ class TransactionDialog(QDialog):
             if index >= 0:
                 self.currency_combo.setCurrentIndex(index)
         self._kind_changed(kind, initial=True)
+        self.category_combo.currentIndexChanged.connect(self._category_changed)
+        self.payee_input.editingFinished.connect(self._lookup_rule)
+        if refund_of is not None:
+            self._load_refunds(refund_of.id)
+            self.refund_check.setChecked(True)
         self.account_combo.currentIndexChanged.connect(self._account_changed)
         self.currency_combo.currentIndexChanged.connect(self._currency_changed)
         self.amount_input.textChanged.connect(self._update_preview)
@@ -285,7 +319,95 @@ class TransactionDialog(QDialog):
         self.amount_symbol.setText(symbol)
         self._target_changed()
 
+    def _category_changed(self, *_args) -> None:
+        if not self._applying_rule:
+            self._category_touched = True
+
+    def _lookup_rule(self) -> None:
+        kind = self.kind_control.value()
+        payee = self.payee_input.text().strip()
+        if kind not in ("expense", "income") or not payee:
+            self._rule = None
+            self._rule_tags = []
+            self.rule_hint.hide()
+            return
+        rule = self.service.match_category_rule(payee, kind)
+        self._rule = rule
+        self._rule_tags = list(rule.tags) if rule else []
+        if rule is None:
+            self.rule_hint.hide()
+            return
+        message = t(
+            "已匹配规则「{pattern}」：{category}",
+            pattern=rule.pattern,
+            category=rule.category_name,
+        )
+        if rule.tags:
+            message += t("；自动添加标签：{tags}", tags=rule.tag_text)
+        self.rule_hint.setText(message)
+        self.rule_hint.show()
+        if not self._category_touched:
+            index = self.category_combo.findData(rule.category_id)
+            if index >= 0 and index != self.category_combo.currentIndex():
+                self._applying_rule = True
+                self.category_combo.setCurrentIndex(index)
+                self._applying_rule = False
+
+    def _load_refunds(self, select_id: int | None = None) -> None:
+        current = select_id or self.refund_combo.currentData()
+        self.refund_combo.clear()
+        rows = list(
+            self.service.repo.transactions(
+                TransactionFilter(kind="expense", limit=500)
+            )
+        )
+        if current is not None:
+            matched = next((item for item in rows if item.id == int(current)), None)
+            if matched is None:
+                try:
+                    matched = self.service.repo.get_transaction(int(current))
+                except ValueError:
+                    matched = None
+            if matched is not None:
+                rows = [matched] + [
+                    item for item in rows if item.id != matched.id
+                ]
+        for item in rows:
+            self.refund_combo.addItem(
+                f"{item.date} · {item.title} · "
+                f"{self.service.format_money(item.amount, item.currency)}",
+                item.id,
+            )
+        if current is not None:
+            index = self.refund_combo.findData(int(current))
+            if index >= 0:
+                self.refund_combo.setCurrentIndex(index)
+
+    def _refund_toggled(self, checked: bool) -> None:
+        if not checked:
+            self.refund_label.hide()
+            self.refund_combo.hide()
+            return
+        if self.refund_combo.count() == 0:
+            self._load_refunds()
+        self.refund_label.show()
+        self.refund_combo.show()
+        if self.refund_combo.currentData() is None and self.refund_combo.count():
+            self.refund_combo.setCurrentIndex(0)
+
+    def _sync_refund_visibility(self, kind: str) -> None:
+        is_income = kind == "income"
+        self.refund_check.setVisible(is_income)
+        if not is_income:
+            self.refund_check.setChecked(False)
+            self.refund_label.hide()
+            self.refund_combo.hide()
+        elif self.refund_check.isChecked():
+            self.refund_label.show()
+            self.refund_combo.show()
+
     def _fill(self, transaction: Transaction) -> None:
+        self._category_touched = True
         self.amount_input.setText(
             f"{transaction.amount // 100}.{transaction.amount % 100:02d}"
         )
@@ -312,6 +434,9 @@ class TransactionDialog(QDialog):
         self.note_input.setText(transaction.note)
         self.waive_check.setChecked(transaction.fee_waived)
         self.kind_control.set_value(transaction.kind, emit=False)
+        if transaction.refund_of_id:
+            self._load_refunds(transaction.refund_of_id)
+            self.refund_check.setChecked(True)
         self._update_preview()
 
     # ------------------------------------------------------------------
@@ -482,13 +607,20 @@ class TransactionDialog(QDialog):
             self._hide_fee()
         if not initial:
             self._load_categories()
+            self._category_touched = False
+            self._rule = None
+            self._rule_tags = []
+            self.rule_hint.hide()
+            self._lookup_rule()
             if is_transfer:
                 self._load_targets()
+        self._sync_refund_visibility(kind)
         self.error.hide()
         self._update_preview()
 
     def _save(self) -> None:
         kind = self.kind_control.value()
+        self._lookup_rule()
         try:
             amount = parse_amount(self.amount_input.text())
         except ValueError as exc:
@@ -535,6 +667,21 @@ class TransactionDialog(QDialog):
             payee=self.payee_input.text().strip(),
             note=self.note_input.text().strip(),
         )
+        if kind == "income" and self.refund_check.isChecked():
+            refund_of_id = self.refund_combo.currentData()
+            if not refund_of_id:
+                show_error(self.error, t("请选择原支出记录"))
+                return
+            fields["refund_of_id"] = refund_of_id
+        else:
+            fields["refund_of_id"] = None
+        used_rule = (
+            self._rule
+            if self._rule is not None and category_id == self._rule.category_id
+            else None
+        )
+        if used_rule is not None and not self.transaction and used_rule.tags:
+            fields["tags"] = list(used_rule.tags)
         try:
             if self.transaction:
                 self.service.update_transaction(self.transaction.id, **fields)
@@ -543,6 +690,8 @@ class TransactionDialog(QDialog):
         except (ValueError, RateError) as exc:
             show_error(self.error, str(exc))
             return
+        if used_rule is not None:
+            self.service.record_rule_hit(used_rule.id)
         self.accept()
 
 

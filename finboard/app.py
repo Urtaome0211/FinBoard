@@ -7,6 +7,7 @@ import ctypes
 import logging
 import sqlite3
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from . import __app_name__, __app_name_cn__, __version__
+from .core.backup import create_backup, latest_backup, quick_check
 from .core.database import Database
 from .core.models import TransactionFilter
 from .core.paths import default_db_path, demo_db_path, log_path, portable_data_dir
@@ -102,6 +104,29 @@ def _set_windows_app_id() -> None:
         pass
 
 
+def _startup_maintenance(
+    db: Database, settings: QSettings
+) -> tuple[bool, str]:
+    """Check the database, then create a daily automatic backup when needed."""
+    ok, detail = quick_check(db)
+    if not ok:
+        log.error("Database integrity check failed: %s", detail)
+        return False, detail
+    if str(db.path) == ":memory:":
+        return True, ""
+    if not settings.value("backup/auto", True, type=bool):
+        return True, ""
+    try:
+        newest = latest_backup(db.path)
+        stale = newest is None or (time.time() - newest.stat().st_mtime) > 20 * 3600
+        if stale:
+            keep = int(settings.value("backup/keep", 10))
+            create_backup(db, keep=keep)
+    except Exception:  # a backup failure must never block the app
+        log.exception("Automatic backup failed")
+    return True, ""
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     _configure_logging()
@@ -132,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     _install_excepthook()
     db, fallback = _open_database(Path(db_path), allow_fallback=args.db is None)
     repo = Repository(db)
+    integrity_ok, integrity_detail = _startup_maintenance(db, settings)
     if args.reset_demo or (
         (args.demo or args.reset_demo) and repo.count_transactions(TransactionFilter(limit=1)) == 0
     ):
@@ -148,6 +174,15 @@ def main(argv: list[str] | None = None) -> int:
     window.show()
     if fallback is not None:
         window.notify(t("默认数据目录不可写，已改用 {path}", path=fallback.parent))
+    if not integrity_ok:
+        QMessageBox.warning(
+            window,
+            t("数据库检查失败"),
+            t(
+                "数据库完整性检查未通过，请尽快在设置页从最近的备份恢复。\n\n{detail}",
+                detail=integrity_detail,
+            ),
+        )
     if args.smoke_test:
         QTimer.singleShot(1200, app.quit)
     log.info(

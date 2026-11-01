@@ -25,6 +25,10 @@ class V40Test(unittest.TestCase):
         self.db.close()
         self.tmp.cleanup()
 
+    def _clear_undo(self) -> None:
+        with self.db.conn:
+            self.db.conn.execute("DELETE FROM undo_log")
+
     def _add(self, *, kind="expense", category=None, amount=10_000, account_id=None):
         return self.service.add_transaction(
             date="2026-10-30",
@@ -48,7 +52,7 @@ class V40Test(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 )
             }
-        self.assertEqual(version, 12)
+        self.assertEqual(version, 13)
         self.assertIn("realized_profit", columns)
         self.assertIn("dividends", columns)
         self.assertIn("undo_log", tables)
@@ -75,6 +79,7 @@ class V40Test(unittest.TestCase):
     def test_bulk_update_and_undo(self) -> None:
         first = self._add(category=self.expense[0])
         second = self._add(category=self.expense[0])
+        self._clear_undo()
         result = self.service.bulk_update_transactions(
             [first, second],
             category_id=self.expense[1].id,
@@ -116,6 +121,7 @@ class V40Test(unittest.TestCase):
                 (self.expense[1].id, 5_000, ""),
             ],
         )
+        self._clear_undo()
         result = self.service.bulk_update_transactions(
             [transfer, split],
             category_id=self.expense[1].id,

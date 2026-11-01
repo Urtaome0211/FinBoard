@@ -20,7 +20,8 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 ### 功能
 
 - **总览**：净资产、本月收入/支出/结余、资产与负债百分比环图、近 6 个月趋势、最近记录、预算进度。
-- **收支明细**：按月份、类型、账户、分类、标签筛选，支持关键词搜索；每笔显示对应账户动账后的余额（转账显示转出账户余额）；双击编辑、右键删除、Delete 删除；支持拆分、标签、附件与 CSV 导出；多选后批量改分类/加移除标签，可撤销上一笔批量修改。
+- **收支明细**：按月份、类型、账户、分类、标签筛选，支持关键词搜索；每笔显示对应账户动账后的余额（转账显示转出账户余额）；双击编辑、右键删除、Delete 删除；支持拆分、标签、附件与 CSV 导出；多选后批量改分类/加移除标签；可用 Ctrl+Z 撤销上一步操作（新增、编辑、删除、标签/拆分修改与批量修改）。
+- **退款**：收入可勾选「这是一笔退款」并关联原支出；退款不计入收入，按净额冲减支出统计、分类排行与现金流预测；系统会校验原支出类型、退款上限和删除顺序。
 - **账户**：现金、储蓄卡、投资理财、信用卡、贷款五类账户；每个账户可设自己的币种；实时余额由期初余额和流水聚合得出；信用卡/贷款按欠款金额（正数）录入，自动计入负债；支持归档与恢复。
 - **固定资产**：登记房产、车辆等长期资产，记录购买价、当前估值和估值日期；计入总资产/净资产与结构环图，不计入可用现金、预算和现金流预测。
 - **投资市值**：投资理财账户可按日记录收盘总市值，账户余额自动变为「最新市值 + 市值日之后的流水」；带历史曲线、同日覆盖、删除重算，市值变动不计入收支。
@@ -37,7 +38,8 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 - **报表**：投资组合汇总、资产/负债结构、本月支出构成、近 12 个月趋势、支出分类排行、消费对象 Top 5；可导出 Excel 或 PDF。
 - **记账**：支持支出、收入、账户间转账；可填写日期、金额、账户、分类、对方、备注。
 - **分类管理**：自定义支出/收入分类名称与颜色；删除分类时，历史记录自动归入「其他」。
-- **数据**：CSV 导入/导出（支持自定义列映射、保存导入规则、按日期/类型/金额/账户/对方去重）、数据库备份、载入演示数据、清空全部数据。
+- **自动分类规则**：按付款对象关键词自动填充分类与标签；可在设置页管理规则、从历史记录学习（同一付款对象至少出现两次且分类一致），并把规则标签回填到历史交易。
+- **数据**：CSV 导入/导出（支持自定义列映射、保存导入规则、按日期/类型/金额/账户/对方去重）、数据库备份（启动时完整性检查、每日自动轮转、可从备份恢复）、载入演示数据、清空全部数据。
 - **交易元数据**：一笔支出/收入可拆分到多个分类（合计必须等于交易金额），可加多个标签，可把回单/发票复制为附件；转账不可拆分。
 - **体验**：浅色/深色主题一键切换、中英文界面切换（默认中文）、全局搜索、快捷键、卡片式扁平布局。
 
@@ -222,7 +224,7 @@ dist\FinBoard\FinBoard.exe --version
 - 可用环境变量 `FINBOARD_DATA_DIR` 改数据目录，或用 `FINBOARD_DB` 指定数据库文件。
 - 若用户目录不可写（便携盘、受限环境），程序会自动回退到可执行文件旁的 `FinBoard-Data\finboard.db`，并在启动时提示。
 - 账目全部保存在本地 SQLite 文件中。程序唯一的网络请求是向 Frankfurter 获取公开汇率；请求只包含目标币种列表，不包含任何账户、金额或个人信息。离线时继续使用本地缓存汇率。
-- 备份方式：设置页「备份数据库」，或直接复制 `finboard.db`（建议先退出程序）。
+- 备份方式：设置页「备份数据库」或「从备份恢复」；程序启动时会做完整性检查，并把超过 20 小时的备份自动写入 `backups/`。也可直接复制 `finboard.db`（建议先退出程序）。
 
 ### 项目结构
 
@@ -287,6 +289,9 @@ FinBoard.spec               # PyInstaller 构建配置
 - **投资市值快照**：`account_valuations` 每个账户每日最多一条；最新快照接管余额，只叠加 `date > 快照日期` 的流水。市值变化不写入 `transactions`，因此不会伪装成收入或支出；删除快照后余额自动回到上一份快照或期初余额。
 - **定期交易**：规则只保存模板和 `next_date`，到期后由用户确认才调用记账逻辑；入账后按频率推进下一次日期，月末日期会自动夹到目标月份的最后一天，超过结束日期自动停用。
 - **账户对账**：账单余额与账本余额的差额写入 `accounts.adjustment`，不产生 `transactions`，所以不会污染收支、预算和分类报表；对账历史删除时会把差额撤销。
+- **退款净额**：退款仍是一条 `income` 记录，但带有 `refund_of_id` 指向原支出；月度统计、趋势、分类报表和现金流预测会把退款从支出中扣减，而不会把它算作收入，从而避免收入与支出同时虚增。
+- **自动分类**：`category_rules` 用 `lower(pattern) + kind` 唯一约束保存关键词，匹配时按 `casefold` 包含、最长关键词优先；新建交易时只提示并预填，命中计数与标签回填都是显式操作。
+- **备份与恢复**：启动时先执行 `PRAGMA quick_check`，超过 20 小时未备份则用 SQLite 在线备份写入 `backups/`，默认保留 10 份；恢复前会先为当前数据库创建一份安全快照，并校验目标库的 schema 版本与完整性。
 - **持仓与现金**：`holdings` 用百万分之一股存储数量，成本/市值/盈亏全部用整数分计算；投资账户没有市值快照时，余额 = 现金 + 持仓市值。现金通过 `accounts.adjustment` 校准，不写收支；「按市值校准」会把现金和持仓合计写成当天估值。
 - **预算结转**：只有上个月开启 rollover 且剩余为正时才带入下月，逐月递归；超支归零，避免负预算继续扩张。
 - **现金流预测**：期初现金只含现金/储蓄卡账户；非定期收支取近 3 个完整月均值，定期规则按 `next_date` 逐次投影；转账不计入。
@@ -297,7 +302,7 @@ FinBoard.spec               # PyInstaller 构建配置
 ### 测试与构建
 
 ```bash
-# 单元测试（109 个）
+# 单元测试（116 个）
 python -m unittest discover -s tests
 
 # 核心冒烟（临时数据库、演示数据、CSV 往返）
@@ -323,6 +328,10 @@ python -m PyInstaller FinBoard.spec --noconfirm --clean
 - 定期交易不会在后台自动入账，必须到「定期」页确认；这是为了避免程序未运行时错过日期却静默改账。
 - 账户对账只对普通账户开放；投资账户请用市值快照校准。对账调整不写入收支，删除对账历史会撤销对应差额。
 - 固定资产只记录购买价和当前估值，不做折旧、贷款关联或处置；首版也不支持附件。
+- 退款只能关联支出记录，且同一原支出的退款合计不能超过原金额；退款不计收入、只冲减支出，因此报表净额与流水笔数可能不同。
+- 自动分类规则按付款对象包含关键词匹配，多个规则命中时取最长关键词；规则只在新建或编辑交易时提示，不会静默改写已保存的交易，标签回填需手动触发。
+- 自动备份默认开启，最多保留 10 份数据库快照，启动时超过 20 小时未备份才会创建；备份只含数据库，附件仍需另行备份 `attachments/`。
+- 撤销日志最多保留最近 100 步，覆盖新增、编辑、删除、标签/拆分修改和批量修改；重启后仍可撤销，但清空数据库会一并清除。
 - 单用户、单机；没有登录、加密或云同步。
 - 预算按自然月设置；只有勾选「结转到下月」的预算才会把正剩余带入下月，超支不结转。
 - 不直接连接银行/支付宝/微信账单，需通过 CSV 导入；自定义 CSV 规则只在导入时使用，不改变原始文件。
@@ -348,7 +357,8 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 ### Features
 
 - **Dashboard**: net worth, monthly income/expense/balance, asset-vs-liability donut, 6-month trend, recent transactions and budget progress.
-- **Transactions**: filter by month, kind, account, category and tag; search by payee/note; each row shows the account balance after that posting (transfers show the source account); edit, delete, split across categories, tag, attach receipts and export to CSV; select multiple rows to change category or add/remove tags in bulk, and undo the last bulk edit.
+- **Transactions**: filter by month, kind, account, category and tag; search by payee/note; each row shows the account balance after that posting (transfers show the source account); edit, delete, split across categories, tag, attach receipts and export to CSV; select multiple rows to change category or add/remove tags in bulk; press Ctrl+Z to undo the last action (new entry, edit, delete, tag/split change or bulk edit).
+- **Refunds**: tick “This is a refund” on an income entry and link it to the original expense. Refunds do not count as income; they reduce expense totals, category rankings and cash-flow forecasts on a net basis. The original kind, refund cap and deletion order are validated.
 - **Accounts**: cash, debit card, investment, credit card and loan accounts, each with its own currency. Balances are aggregated from the opening balance and transactions in real time. Archive and restore are supported.
 - **Fixed assets**: track property, vehicles and other long-lived assets with purchase price, current value and valuation date. They count toward total assets and net worth, and appear as a separate donut segment; they are excluded from liquid cash, budgets and cash-flow forecasts.
 - **Investment valuations**: record a closing market value per day for investment accounts. The balance becomes “latest snapshot + later transactions”, with a history chart, same-day overwrite and delete-to-recalculate. Market moves are not counted as income or expense.
@@ -365,7 +375,8 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 - **Reports**: asset/liability structure, monthly expense composition, 12-month trend, portfolio summary, category ranking and top payees; export to Excel or PDF.
 - **Bookkeeping**: expenses, income and account-to-account transfers with date, amount, account, category, payee and note.
 - **Categories**: custom names and colors; deleting a category moves its history to “Other”.
-- **Data tools**: CSV import/export with custom column mapping, saved import rules and duplicate detection (date, kind, amount, account, payee); database backup, demo data and full reset.
+- **Automatic category rules**: fill category and tags from a payee keyword. Manage rules in Settings, learn them from history (same payee at least twice with one category), and backfill rule tags into matching transactions.
+- **Data tools**: CSV import/export with custom column mapping, saved import rules and duplicate detection (date, kind, amount, account, payee); database backup with startup integrity checks, daily rotation and restore; demo data and full reset.
 - **Transaction metadata**: split an expense/income across categories (the total must equal the transaction), add multiple tags and copy receipts/invoices as attachments. Transfers cannot be split.
 - **Experience**: light/dark theme, Chinese/English interface with Chinese as the default, global search, keyboard shortcuts, flat card layout.
 
@@ -541,7 +552,7 @@ Default location on Windows:
 - Override the data directory with `FINBOARD_DATA_DIR`, or the database file with `FINBOARD_DB`.
 - If the profile directory is not writable (portable drive or restricted machine), the app falls back to `FinBoard-Data\finboard.db` beside the executable and shows a notice at startup.
 - All books live in a local SQLite file. The only network request fetches public exchange rates from Frankfurter; it contains the requested currency codes and no account, amount or personal information. When offline, the last cached rates remain usable.
-- Back up from Settings → Data, or copy `finboard.db` while the app is closed.
+- Back up from Settings → Data (or restore an existing snapshot). At startup FinBoard checks integrity and rotates a snapshot into `backups/` when the newest one is over 20 hours old. You can also copy `finboard.db` while the app is closed.
 
 ### Design notes
 
@@ -552,6 +563,9 @@ Default location on Windows:
 - **Withdrawal fees**: the transaction row keeps `fee`, `fee_waived` and `fee_included`; `fees.py` computes the fee from the wallet name and the CNY posting amount. A full withdrawal includes the fee in the amount and sends the net, a partial one deducts the fee separately, and a waiver stores zero. Balances, monthly stats and category reports include the fee; CSV imports recalculate it.
 - **Recurring rules**: a rule stores only a template and `next_date`; posting is explicit and advances the schedule by one interval. Month-end dates clamp to the target month's last day, and rules stop automatically after their end date.
 - **Reconciliation**: the difference between the statement and ledger balances is stored in `accounts.adjustment`, never as a transaction, so income/expense, budgets and category reports stay untouched. Deleting a reconciliation reverses its adjustment.
+- **Refund netting**: a refund is still an `income` row, but carries `refund_of_id` pointing to the original expense. Monthly stats, trends, category reports and forecasts subtract refunds from expenses instead of counting them as income, so neither income nor expense is inflated.
+- **Automatic rules**: `category_rules` stores a keyword with a unique `lower(pattern) + kind` constraint. Matching is case-insensitive containment with the longest keyword winning; creating a transaction only prefills and hints, hit counts and tag backfills are explicit actions.
+- **Backup & restore**: startup runs `PRAGMA quick_check` and creates an online SQLite backup in `backups/` when the newest snapshot is over 20 hours old, keeping 10 by default. Restoring first snapshots the current database and validates the target schema version and integrity.
 - **Custom charts**: donut, trend and category bars are painted in `paintEvent` with palette colors and repaint on theme changes.
 - **Theme system**: a single `Palette` dataclass drives QPalette, QSS and charts; the choice is stored in `QSettings`.
 - **Local-first**: no login, sync or telemetry; only one daily public rate request, and failures never block offline use.
@@ -559,7 +573,7 @@ Default location on Windows:
 ### Testing & build
 
 ```bash
-# 109 unit tests
+# 116 unit tests
 python -m unittest discover -s tests
 
 # Core smoke test (temporary DB, demo data, CSV round-trip)
@@ -585,6 +599,10 @@ Output: `dist/FinBoard/FinBoard.exe` (one-dir; ship the whole folder).
 - Recurring transactions never post in the background; confirm them on the Recurring page. This avoids silently changing the books when a scheduled date passes while the app is closed.
 - Reconciliation is available for non-investment accounts only. Use valuation snapshots for investments; deleting a reconciliation reverses its adjustment.
 - Fixed assets store purchase price and current value only; there is no depreciation, linked mortgage, disposal or attachments in this version.
+- Refunds can only be linked to expense entries, and the total refunded against one expense cannot exceed its amount. Refunds do not count as income and only reduce expenses, so report net totals can differ from the number of entries.
+- Automatic rules match by keyword contained in the payee; the longest matching keyword wins. Rules only suggest and prefill when creating or editing a transaction; saved transactions are never rewritten silently, and tag backfilling is manual.
+- Automatic backup is enabled by default and keeps up to 10 database snapshots. A backup is created at startup only when the newest one is more than 20 hours old. Backups contain the database only; back up `attachments/` separately.
+- The undo log keeps the last 100 actions (new, edit, delete, tag/split change and bulk edit). It survives restarts but is cleared with a full reset.
 - Single-user, single-machine: no login, encryption or cloud sync.
 - Budgets are per calendar month and roll over only when explicitly enabled; overspending never rolls over.
 - No direct bank/Alipay/WeChat sync; use CSV import. Custom CSV rules are used only during import and never modify the source file.

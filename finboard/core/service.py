@@ -9,11 +9,18 @@ import uuid
 from PySide6.QtCore import QObject, Signal
 
 from . import csv_io
+from .backup import (
+    create_backup as _create_backup,
+    list_backups,
+    quick_check,
+    restore_backup as _restore_backup,
+)
 from .dates import today_iso
 from .models import (
     AccountValuation,
     Attachment,
     BulkResult,
+    CategoryRule,
     CsvRule,
     FixedAsset,
     ForecastPoint,
@@ -159,6 +166,71 @@ class FinanceService(QObject):
         if message:
             self.changed.emit()
         return message
+
+    # ---------------------------------------------------------- category rules
+    def category_rules(self) -> list[CategoryRule]:
+        return self.repo.category_rules()
+
+    def add_category_rule(
+        self,
+        pattern: str,
+        kind: str,
+        category_id: int,
+        tags: list[str] | None = None,
+    ) -> int:
+        rule_id = self.repo.add_category_rule(pattern, kind, category_id, tags)
+        self.changed.emit()
+        return rule_id
+
+    def update_category_rule(
+        self,
+        rule_id: int,
+        *,
+        pattern: str | None = None,
+        category_id: int | None = None,
+        tags: list[str] | None = None,
+    ) -> None:
+        self.repo.update_category_rule(
+            rule_id, pattern=pattern, category_id=category_id, tags=tags
+        )
+        self.changed.emit()
+
+    def delete_category_rule(self, rule_id: int) -> None:
+        self.repo.delete_category_rule(rule_id)
+        self.changed.emit()
+
+    def match_category_rule(self, payee: str, kind: str) -> CategoryRule | None:
+        return self.repo.match_category_rule(payee, kind)
+
+    def record_rule_hit(self, rule_id: int) -> None:
+        self.repo.record_rule_hit(rule_id)
+
+    def learn_category_rules(self, min_count: int = 2) -> int:
+        created = self.repo.learn_category_rules(min_count)
+        if created:
+            self.changed.emit()
+        return created
+
+    def apply_rule_tags_to_history(self, rule_id: int | None = None) -> int:
+        changed = self.repo.apply_rule_tags_to_history(rule_id)
+        if changed:
+            self.changed.emit()
+        return changed
+
+    # ------------------------------------------------------------------ backup
+    def create_backup(self, *, keep: int = 10) -> Path:
+        return _create_backup(self.repo.db, keep=keep)
+
+    def backups(self) -> list[Path]:
+        return list_backups(self.repo.db.path)
+
+    def check_integrity(self) -> tuple[bool, str]:
+        return quick_check(self.repo.db)
+
+    def restore_backup(self, source: str | Path) -> None:
+        _restore_backup(self.repo.db, source)
+        self.rate_store = self.repo.rates
+        self.changed.emit()
 
     def transaction_balances(
         self, transaction_ids: list[int]

@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -309,6 +309,32 @@ CREATE INDEX IF NOT EXISTS idx_fixed_assets_value ON fixed_assets(current_value)
 """
 
 
+SCHEMA_V13 = """
+ALTER TABLE transactions ADD COLUMN refund_of_id INTEGER
+    REFERENCES transactions(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_transactions_refund
+    ON transactions(refund_of_id);
+
+CREATE TABLE IF NOT EXISTS category_rules (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern     TEXT    NOT NULL,
+    kind        TEXT    NOT NULL CHECK (kind IN ('expense','income')),
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    tags        TEXT    NOT NULL DEFAULT '[]',
+    hit_count   INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_category_rules_unique
+    ON category_rules(lower(pattern), kind);
+
+CREATE INDEX IF NOT EXISTS idx_category_rules_kind
+    ON category_rules(kind);
+"""
+
+
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
 
@@ -381,6 +407,9 @@ class Database:
         if version < 12:
             conn.executescript(SCHEMA_V12)
             version = 12
+        if version < 13:
+            conn.executescript(SCHEMA_V13)
+            version = 13
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

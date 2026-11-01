@@ -37,6 +37,7 @@ from .models import (
     Attachment,
     BudgetLine,
     Category,
+    CategoryRule,
     CategorySpend,
     CsvRule,
     FALLBACK_CATEGORY,
@@ -63,7 +64,7 @@ from .rates import RateError, RateStore
 
 _TXN_SELECT = """
 SELECT t.id, t.date, t.kind, t.amount, t.currency, t.account_amount, t.to_amount, t.fee,
-       t.fee_waived, t.fee_included, t.recurring_id, t.import_hash,
+       t.fee_waived, t.fee_included, t.recurring_id, t.refund_of_id, t.import_hash,
        t.category_id, c.name AS category_name, c.color AS category_color,
        t.account_id, a.name AS account_name, a.currency AS account_currency,
        t.to_account_id, ta.name AS to_account_name,
@@ -200,6 +201,9 @@ class Repository:
             fee_included=bool(row["fee_included"]),
             recurring_id=(
                 int(row["recurring_id"]) if row["recurring_id"] is not None else None
+            ),
+            refund_of_id=(
+                int(row["refund_of_id"]) if row["refund_of_id"] is not None else None
             ),
             account_currency=row["account_currency"] or "CNY",
             to_account_currency=row["to_account_currency"] or "CNY",
@@ -1869,6 +1873,211 @@ class Repository:
         self._replace_splits(transaction_id, splits)
         self._replace_tags(transaction_id, tags)
 
+    # -------------------------------------------------------- undo snapshots
+    UNDO_LIMIT = 100
+
+    _TXN_COLUMNS = (
+        "id",
+        "date",
+        "kind",
+        "amount",
+        "category_id",
+        "account_id",
+        "to_account_id",
+        "payee",
+        "note",
+        "created_at",
+        "updated_at",
+        "currency",
+        "account_amount",
+        "to_amount",
+        "fee",
+        "fee_waived",
+        "fee_included",
+        "recurring_id",
+        "import_hash",
+        "refund_of_id",
+    )
+
+    def _snapshot(self, transaction_id: int) -> dict[str, object]:
+        """Full row plus metadata, used by the generic undo log."""
+        row = self.conn.execute(
+            "SELECT * FROM transactions WHERE id = ?", (transaction_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("记录不存在")
+        data: dict[str, object] = {
+            key: row[key] for key in self._TXN_COLUMNS if key in row.keys()
+        }
+        data["splits"] = [
+            {
+                "category_id": int(item["category_id"]),
+                "amount": int(item["amount"]),
+                "note": item["note"] or "",
+                "position": int(item["position"]),
+            }
+            for item in self.conn.execute(
+                "SELECT category_id, amount, note, position FROM transaction_splits"
+                " WHERE transaction_id = ? ORDER BY position, id",
+                (transaction_id,),
+            )
+        ]
+        data["tags"] = [
+            str(item["name"])
+            for item in self.conn.execute(
+                "SELECT t.name FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id"
+                " WHERE tt.transaction_id = ? ORDER BY t.name",
+                (transaction_id,),
+            )
+        ]
+        data["attachments"] = [
+            {
+                "filename": item["filename"],
+                "stored_name": item["stored_name"],
+                "mime_type": item["mime_type"] or "",
+                "size": int(item["size"] or 0),
+                "created_at": item["created_at"] or "",
+            }
+            for item in self.conn.execute(
+                "SELECT filename, stored_name, mime_type, size, created_at"
+                " FROM attachments WHERE transaction_id = ? ORDER BY created_at, id",
+                (transaction_id,),
+            )
+        ]
+        return data
+
+    def _log_undo(
+        self, conn: sqlite3.Connection, action: str, payload: object
+    ) -> None:
+        conn.execute(
+            "INSERT INTO undo_log (action, payload, created_at) VALUES (?, ?, ?)",
+            (
+                action,
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                now_iso(),
+            ),
+        )
+        conn.execute(
+            "DELETE FROM undo_log WHERE id NOT IN"
+            " (SELECT id FROM undo_log ORDER BY id DESC LIMIT ?)",
+            (self.UNDO_LIMIT,),
+        )
+
+    def _restore_snapshot(
+        self, conn: sqlite3.Connection, data: dict[str, object]
+    ) -> None:
+        transaction_id = int(data["id"])
+        values = [data.get(column) for column in self._TXN_COLUMNS]
+        exists = conn.execute(
+            "SELECT 1 FROM transactions WHERE id = ?", (transaction_id,)
+        ).fetchone()
+        if exists:
+            assignments = ", ".join(
+                f"{column} = ?" for column in self._TXN_COLUMNS if column != "id"
+            )
+            conn.execute(
+                f"UPDATE transactions SET {assignments} WHERE id = ?",
+                (*values[1:], transaction_id),
+            )
+        else:
+            placeholders = ", ".join("?" for _ in self._TXN_COLUMNS)
+            conn.execute(
+                f"INSERT INTO transactions ({', '.join(self._TXN_COLUMNS)})"
+                f" VALUES ({placeholders})",
+                values,
+            )
+        conn.execute(
+            "DELETE FROM transaction_splits WHERE transaction_id = ?",
+            (transaction_id,),
+        )
+        for item in data.get("splits", []):  # type: ignore[union-attr]
+            conn.execute(
+                "INSERT INTO transaction_splits"
+                " (transaction_id, category_id, amount, note, position)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    transaction_id,
+                    int(item["category_id"]),
+                    int(item["amount"]),
+                    str(item.get("note") or "")[:100],
+                    int(item.get("position") or 0),
+                ),
+            )
+        self._replace_tags(transaction_id, [str(name) for name in data.get("tags", [])])  # type: ignore[union-attr]
+        conn.execute(
+            "DELETE FROM attachments WHERE transaction_id = ?", (transaction_id,)
+        )
+        for item in data.get("attachments", []):  # type: ignore[union-attr]
+            conn.execute(
+                "INSERT INTO attachments"
+                " (transaction_id, filename, stored_name, mime_type, size, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    transaction_id,
+                    str(item["filename"]),
+                    str(item["stored_name"]),
+                    str(item.get("mime_type") or ""),
+                    int(item.get("size") or 0),
+                    str(item.get("created_at") or now_iso()),
+                ),
+            )
+
+    def _refunded_ids(self, transaction_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM transactions WHERE refund_of_id = ?",
+            (transaction_id,),
+        ).fetchone()
+        return int(row[0])
+
+    def _refund_total(self, refund_of_id: int, exclude_id: int | None = None) -> int:
+        clause = " AND id <> ?" if exclude_id is not None else ""
+        params: tuple[object, ...] = (refund_of_id,)
+        if exclude_id is not None:
+            params = (refund_of_id, exclude_id)
+        rows = self.conn.execute(
+            "SELECT amount, currency, date FROM transactions"
+            " WHERE refund_of_id = ?" + clause,
+            params,
+        ).fetchall()
+        return sum(
+            self._to_base(int(row["amount"]), row["currency"], row["date"])
+            for row in rows
+        )
+
+    def _validate_refund(
+        self,
+        *,
+        kind: str,
+        amount: int,
+        currency: str,
+        refund_of_id: int | None,
+        transaction_id: int | None = None,
+        date: str | None = None,
+    ) -> None:
+        if refund_of_id is None:
+            return
+        if kind != "income":
+            raise ValueError("只有收入记录可以关联退款")
+        if transaction_id is not None and int(refund_of_id) == int(transaction_id):
+            raise ValueError("退款不能关联到自身")
+        row = self.conn.execute(
+            "SELECT id, kind, amount, currency, date FROM transactions WHERE id = ?",
+            (int(refund_of_id),),
+        ).fetchone()
+        if row is None:
+            raise ValueError("关联的原支出不存在")
+        if row["kind"] != "expense":
+            raise ValueError("退款只能关联支出记录")
+        original = self._to_base(
+            int(row["amount"]), row["currency"], row["date"]
+        )
+        previous = self._refund_total(
+            int(refund_of_id), exclude_id=transaction_id
+        )
+        current = self._to_base(int(amount), currency, date or today_iso())
+        if previous + current > original:
+            raise ValueError("退款金额合计不能超过原支出")
+
     def add_transaction(
         self,
         *,
@@ -1886,6 +2095,7 @@ class Repository:
         fee_waived: bool = False,
         fee_included: bool | None = None,
         recurring_id: int | None = None,
+        refund_of_id: int | None = None,
         splits: Iterable[tuple[int, int, str]] | None = None,
         tags: Iterable[str] | None = None,
         import_hash: str | None = None,
@@ -1898,6 +2108,13 @@ class Repository:
             category_id=category_id,
             to_account_id=to_account_id,
             currency=currency,
+        )
+        self._validate_refund(
+            kind=kind,
+            amount=amount,
+            currency=currency,
+            refund_of_id=refund_of_id,
+            date=date,
         )
         split_rows = self._normalize_splits(kind, amount, splits)
         tag_names = self._normalize_tags(tags)
@@ -1933,9 +2150,10 @@ class Repository:
             )
         cursor = self.conn.execute(
             "INSERT INTO transactions (date, kind, amount, currency, account_amount,"
-            " to_amount, fee, fee_waived, fee_included, recurring_id, category_id,"
-            " account_id, to_account_id, payee, note, import_hash, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " to_amount, fee, fee_waived, fee_included, recurring_id, refund_of_id,"
+            " category_id, account_id, to_account_id, payee, note, import_hash,"
+            " created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 date,
                 kind,
@@ -1947,6 +2165,7 @@ class Repository:
                 int(bool(fee_waived)),
                 int(included),
                 recurring_id,
+                refund_of_id,
                 category_id,
                 account_id,
                 to_account_id,
@@ -1959,6 +2178,9 @@ class Repository:
         transaction_id = int(cursor.lastrowid)
         self._save_metadata(transaction_id, split_rows, tag_names)
         self.conn.commit()
+        snapshot = self._snapshot(transaction_id)
+        with self.db.transaction() as conn:
+            self._log_undo(conn, "add", snapshot)
         return transaction_id
 
     def update_transaction(
@@ -1978,9 +2200,11 @@ class Repository:
         to_amount: int | None = None,
         fee_waived: bool = False,
         fee_included: bool | None = None,
+        refund_of_id: int | None = None,
         splits: Iterable[tuple[int, int, str]] | None = None,
         tags: Iterable[str] | None = None,
     ) -> None:
+        previous = self._snapshot(transaction_id)
         self.get_transaction(transaction_id)
         date = normalize_day(date)
         self._validate_txn(
@@ -1991,6 +2215,20 @@ class Repository:
             to_account_id=to_account_id,
             currency=currency,
         )
+        self._validate_refund(
+            kind=kind,
+            amount=amount,
+            currency=currency,
+            refund_of_id=refund_of_id,
+            transaction_id=transaction_id,
+            date=date,
+        )
+        if kind != "expense" and self._refunded_ids(transaction_id):
+            raise ValueError("该支出已有退款记录，不能改为其他类型")
+        if kind == "expense" and self._refunded_ids(transaction_id):
+            refunded = self._refund_total(transaction_id)
+            if self._to_base(amount, currency, date) < refunded:
+                raise ValueError("原支出金额不能小于已退款金额")
         split_rows = (
             self._normalize_splits(kind, amount, splits) if splits is not None else None
         )
@@ -2028,39 +2266,45 @@ class Repository:
                 fee_included=fee_included,
                 exclude_transaction_id=transaction_id,
             )
-        self.conn.execute(
-            "UPDATE transactions SET date = ?, kind = ?, amount = ?, currency = ?,"
-            " account_amount = ?, to_amount = ?, fee = ?, fee_waived = ?,"
-            " fee_included = ?, category_id = ?, account_id = ?,"
-            " to_account_id = ?, payee = ?, note = ?, updated_at = ? WHERE id = ?",
-            (
-                date,
-                kind,
-                amount,
-                currency,
-                posted,
-                received,
-                fee,
-                int(bool(fee_waived)),
-                int(included),
-                category_id,
-                account_id,
-                to_account_id,
-                str(payee or "").strip()[:60],
-                str(note or "").strip()[:200],
-                now_iso(),
-                transaction_id,
-            ),
-        )
-        if split_rows is not None:
-            self._replace_splits(transaction_id, split_rows)
-        if tag_names is not None:
-            self._replace_tags(transaction_id, tag_names)
-        self.conn.commit()
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE transactions SET date = ?, kind = ?, amount = ?, currency = ?,"
+                " account_amount = ?, to_amount = ?, fee = ?, fee_waived = ?,"
+                " fee_included = ?, refund_of_id = ?, category_id = ?, account_id = ?,"
+                " to_account_id = ?, payee = ?, note = ?, updated_at = ? WHERE id = ?",
+                (
+                    date,
+                    kind,
+                    amount,
+                    currency,
+                    posted,
+                    received,
+                    fee,
+                    int(bool(fee_waived)),
+                    int(included),
+                    refund_of_id,
+                    category_id,
+                    account_id,
+                    to_account_id,
+                    str(payee or "").strip()[:60],
+                    str(note or "").strip()[:200],
+                    now_iso(),
+                    transaction_id,
+                ),
+            )
+            if split_rows is not None:
+                self._replace_splits(transaction_id, split_rows)
+            if tag_names is not None:
+                self._replace_tags(transaction_id, tag_names)
+            self._log_undo(conn, "update", previous)
 
     def delete_transaction(self, transaction_id: int) -> None:
-        self.conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
-        self.conn.commit()
+        if self._refunded_ids(transaction_id):
+            raise ValueError("该交易已有退款记录，请先删除退款")
+        snapshot = self._snapshot(transaction_id)
+        with self.db.transaction() as conn:
+            self._log_undo(conn, "delete", snapshot)
+            conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
 
     def set_transaction_metadata(
         self,
@@ -2076,11 +2320,13 @@ class Repository:
             else None
         )
         tag_names = self._normalize_tags(tags) if tags is not None else None
-        if split_rows is not None:
-            self._replace_splits(transaction_id, split_rows)
-        if tag_names is not None:
-            self._replace_tags(transaction_id, tag_names)
-        self.conn.commit()
+        previous = self._snapshot(transaction_id)
+        with self.db.transaction() as conn:
+            if split_rows is not None:
+                self._replace_splits(transaction_id, split_rows)
+            if tag_names is not None:
+                self._replace_tags(transaction_id, tag_names)
+            self._log_undo(conn, "metadata", previous)
 
     # ----------------------------------------------------------- bulk & undo
     def bulk_update_transactions(
@@ -2184,21 +2430,40 @@ class Repository:
         ).fetchone()
         if not row:
             return ""
+        action = str(row["action"])
         payload = json.loads(row["payload"])
         with self.db.transaction() as conn:
-            for item in payload:
+            if action == "add":
+                transaction_id = int(payload["id"])
+                if self._refunded_ids(transaction_id):
+                    raise ValueError("这笔记录已有关联退款，无法撤销新增")
                 conn.execute(
-                    "UPDATE transactions SET category_id = ?, updated_at = ?"
-                    " WHERE id = ?",
-                    (item.get("category_id"), now_iso(), int(item["id"])),
+                    "DELETE FROM transactions WHERE id = ?", (transaction_id,)
                 )
-                self._replace_tags(
-                    int(item["id"]), [str(name) for name in item.get("tags", [])]
-                )
+            elif action in ("update", "delete", "metadata"):
+                self._restore_snapshot(conn, payload)
+            else:
+                # Legacy (and current) bulk edits store a list of row states.
+                for item in payload:
+                    conn.execute(
+                        "UPDATE transactions SET category_id = ?, updated_at = ?"
+                        " WHERE id = ?",
+                        (item.get("category_id"), now_iso(), int(item["id"])),
+                    )
+                    self._replace_tags(
+                        int(item["id"]),
+                        [str(name) for name in item.get("tags", [])],
+                    )
             conn.execute("DELETE FROM undo_log WHERE id = ?", (row["id"],))
-        if row["action"] == "bulk_update":
+        messages = {
+            "add": "已撤销新增交易",
+            "update": "已撤销修改",
+            "delete": "已恢复删除的交易",
+            "metadata": "已撤销标签/拆分修改",
+        }
+        if action == "bulk_update":
             return f"已撤销 {len(payload)} 笔批量修改"
-        return "已撤销上一步操作"
+        return messages.get(action, "已撤销上一步操作")
 
     # ------------------------------------------------------- tags & attachments
     def tags(self) -> list[Tag]:
@@ -2443,7 +2708,7 @@ class Repository:
         month = month or month_of(today())
         start, end = month_bounds(month)
         rows = self.conn.execute(
-            "SELECT t.kind, t.amount, t.currency, t.date, t.fee,"
+            "SELECT t.kind, t.amount, t.currency, t.date, t.fee, t.refund_of_id,"
             "       a.currency AS account_currency"
             " FROM transactions t JOIN accounts a ON a.id = t.account_id"
             " WHERE t.date >= ? AND t.date < ?"
@@ -2457,9 +2722,13 @@ class Repository:
                     int(row["fee"]), row["account_currency"], row["date"]
                 )
                 continue
-            totals[row["kind"]] += self._to_base(
+            value = self._to_base(
                 int(row["amount"]), row["currency"], row["date"]
             )
+            if row["kind"] == "income" and row["refund_of_id"] is not None:
+                totals["expense"] -= value
+            else:
+                totals[row["kind"]] += value
         return MonthStats(
             month=month, income=totals["income"], expense=totals["expense"]
         )
@@ -2513,7 +2782,7 @@ class Repository:
         history_end, _ = month_bounds(month_of(today()))
         history_start, _ = month_bounds(shift_month(month_of(today()), -3))
         rows = self.conn.execute(
-            "SELECT t.kind, t.amount, t.currency, t.date"
+            "SELECT t.kind, t.amount, t.currency, t.date, t.refund_of_id"
             " FROM transactions t"
             " WHERE t.date >= ? AND t.date < ? AND t.recurring_id IS NULL"
             " AND t.kind IN ('income','expense')",
@@ -2521,9 +2790,13 @@ class Repository:
         ).fetchall()
         average = {"income": 0, "expense": 0}
         for row in rows:
-            average[row["kind"]] += self._to_base(
+            value = self._to_base(
                 int(row["amount"]), row["currency"], row["date"]
             )
+            if row["kind"] == "income" and row["refund_of_id"] is not None:
+                average["expense"] -= value
+            else:
+                average[row["kind"]] += value
         for key in average:
             average[key] = int(round(average[key] / 3))
 
@@ -2574,7 +2847,7 @@ class Repository:
         _, end = month_bounds(labels[-1])
         rows = self.conn.execute(
             "SELECT substr(t.date, 1, 7) AS month, t.kind, t.amount, t.currency,"
-            "       t.date, t.fee, a.currency AS account_currency"
+            "       t.date, t.fee, t.refund_of_id, a.currency AS account_currency"
             " FROM transactions t JOIN accounts a ON a.id = t.account_id"
             " WHERE t.date >= ? AND t.date < ?"
             " AND (t.kind IN ('expense','income') OR (t.kind = 'transfer' AND t.fee > 0))",
@@ -2588,9 +2861,13 @@ class Repository:
                     int(row["fee"]), row["account_currency"], row["date"]
                 )
                 continue
-            bucket[row["kind"]] += self._to_base(
+            value = self._to_base(
                 int(row["amount"]), row["currency"], row["date"]
             )
+            if row["kind"] == "income" and row["refund_of_id"] is not None:
+                bucket["expense"] -= value
+            else:
+                bucket[row["kind"]] += value
         return [
             MonthStats(
                 month=month,
@@ -2610,18 +2887,19 @@ class Repository:
         else:
             date_clause = ""
             params = (kind,)
+        refund_filter = " AND t.refund_of_id IS NULL" if kind == "income" else ""
         rows = self.conn.execute(
             "SELECT c.id, c.name, c.color, t.amount, t.currency, t.date"
             " FROM transactions t JOIN categories c ON c.id = t.category_id"
             " WHERE t.kind = ? AND NOT EXISTS (SELECT 1 FROM transaction_splits s"
-            " WHERE s.transaction_id = t.id)" + date_clause,
+            " WHERE s.transaction_id = t.id)" + refund_filter + date_clause,
             params,
         ).fetchall()
         split_rows = self.conn.execute(
             "SELECT c.id, c.name, c.color, s.amount, t.currency, t.date"
             " FROM transaction_splits s JOIN transactions t ON t.id = s.transaction_id"
             " JOIN categories c ON c.id = s.category_id"
-            " WHERE t.kind = ?" + date_clause,
+            " WHERE t.kind = ?" + refund_filter + date_clause,
             params,
         ).fetchall()
         rows = list(rows) + list(split_rows)
@@ -2638,6 +2916,26 @@ class Repository:
             item["amount"] = int(item["amount"]) + self._to_base(
                 int(row["amount"]), row["currency"], row["date"]
             )
+        if kind == "expense":
+            refund_params: tuple = (start, end) if month else ()
+            refund_rows = self.conn.execute(
+                "SELECT COALESCE(o.category_id, t.category_id) AS id,"
+                "       c.name, c.color, t.amount, t.currency, t.date"
+                " FROM transactions t"
+                " LEFT JOIN transactions o ON o.id = t.refund_of_id"
+                " JOIN categories c ON c.id = COALESCE(o.category_id, t.category_id)"
+                " WHERE t.kind = 'income' AND t.refund_of_id IS NOT NULL"
+                + date_clause,
+                refund_params,
+            ).fetchall()
+            for row in refund_rows:
+                item = grouped.setdefault(
+                    int(row["id"]),
+                    {"name": row["name"], "color": row["color"], "amount": 0},
+                )
+                item["amount"] = int(item["amount"]) - self._to_base(
+                    int(row["amount"]), row["currency"], row["date"]
+                )
         result = [
             CategorySpend(
                 category_id=category_id,
@@ -2646,6 +2944,7 @@ class Repository:
                 amount=int(item["amount"]),
             )
             for category_id, item in grouped.items()
+            if int(item["amount"]) != 0
         ]
         if kind == "expense":
             fee_clause = " AND t.date >= ? AND t.date < ?" if month else ""
@@ -2694,6 +2993,21 @@ class Repository:
                 int(row["amount"]), row["currency"], row["date"]
             )
             bucket[1] += 1
+        refund_clause = " AND t.date >= ? AND t.date < ?" if month else ""
+        refund_params: tuple = (start, end) if month else ()
+        refund_rows = self.conn.execute(
+            "SELECT COALESCE(o.payee, t.payee) AS payee, t.amount,"
+            "       t.currency, t.date"
+            " FROM transactions t LEFT JOIN transactions o ON o.id = t.refund_of_id"
+            " WHERE t.kind = 'income' AND t.refund_of_id IS NOT NULL"
+            " AND COALESCE(o.payee, t.payee) <> ''" + refund_clause,
+            refund_params,
+        ).fetchall()
+        for row in refund_rows:
+            bucket = totals.setdefault(row["payee"], [0, 0])
+            bucket[0] -= self._to_base(
+                int(row["amount"]), row["currency"], row["date"]
+            )
         fee_rows = self.conn.execute(
             "SELECT fee, a.currency AS account_currency, date"
             " FROM transactions t JOIN accounts a ON a.id = t.account_id"
@@ -2706,7 +3020,10 @@ class Repository:
                 int(row["fee"]), row["account_currency"], row["date"]
             )
             bucket[1] += 1
-        ordered = sorted(totals.items(), key=lambda item: (-item[1][0], item[0]))
+        ordered = sorted(
+            ((payee, value) for payee, value in totals.items() if value[0] > 0),
+            key=lambda item: (-item[1][0], item[0]),
+        )
         return [
             PayeeSpend(payee=payee, amount=value[0], count=value[1])
             for payee, value in ordered[: max(1, min(int(limit), 50))]
@@ -2823,6 +3140,218 @@ class Repository:
         ).fetchone()
         return int(row["amount"]) if row else 0
 
+    # --------------------------------------------------------- category rules
+    def _category_rule(self, row: sqlite3.Row) -> CategoryRule:
+        try:
+            tags = tuple(json.loads(row["tags"] or "[]"))
+        except (TypeError, ValueError):
+            tags = ()
+        return CategoryRule(
+            id=int(row["id"]),
+            pattern=str(row["pattern"]),
+            kind=str(row["kind"]),
+            category_id=int(row["category_id"]),
+            category_name=str(row["category_name"] or ""),
+            category_color=str(row["category_color"] or ""),
+            tags=tags,
+            hit_count=int(row["hit_count"] or 0),
+            created_at=str(row["created_at"] or ""),
+        )
+
+    def category_rules(self) -> list[CategoryRule]:
+        rows = self.conn.execute(
+            "SELECT r.*, c.name AS category_name, c.color AS category_color"
+            " FROM category_rules r JOIN categories c ON c.id = r.category_id"
+            " ORDER BY r.kind, lower(r.pattern)"
+        ).fetchall()
+        return [self._category_rule(row) for row in rows]
+
+    def get_category_rule(self, rule_id: int) -> CategoryRule:
+        row = self.conn.execute(
+            "SELECT r.*, c.name AS category_name, c.color AS category_color"
+            " FROM category_rules r JOIN categories c ON c.id = r.category_id"
+            " WHERE r.id = ?",
+            (int(rule_id),),
+        ).fetchone()
+        if row is None:
+            raise ValueError("分类规则不存在")
+        return self._category_rule(row)
+
+    def add_category_rule(
+        self,
+        pattern: str,
+        kind: str,
+        category_id: int,
+        tags: Iterable[str] | None = None,
+    ) -> int:
+        pattern = str(pattern or "").strip()[:40]
+        if not pattern:
+            raise ValueError("匹配词不能为空")
+        if kind not in ("expense", "income"):
+            raise ValueError("规则类型无效")
+        category = self.get_category(int(category_id))
+        if category.kind != kind:
+            raise ValueError("分类与规则类型不匹配")
+        tag_names = self._normalize_tags(tags or [])
+        try:
+            cursor = self.conn.execute(
+                "INSERT INTO category_rules"
+                " (pattern, kind, category_id, tags, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    pattern,
+                    kind,
+                    int(category_id),
+                    json.dumps(tag_names, ensure_ascii=False),
+                    now_iso(),
+                ),
+            )
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            raise ValueError("同样的匹配规则已存在") from None
+        return int(cursor.lastrowid)
+
+    def update_category_rule(
+        self,
+        rule_id: int,
+        *,
+        pattern: str | None = None,
+        category_id: int | None = None,
+        tags: Iterable[str] | None = None,
+    ) -> None:
+        rule = self.get_category_rule(rule_id)
+        pattern = (
+            str(pattern).strip()[:40] if pattern is not None else rule.pattern
+        )
+        if not pattern:
+            raise ValueError("匹配词不能为空")
+        target = int(category_id) if category_id is not None else rule.category_id
+        category = self.get_category(target)
+        if category.kind != rule.kind:
+            raise ValueError("分类与规则类型不匹配")
+        tag_names = (
+            self._normalize_tags(tags) if tags is not None else list(rule.tags)
+        )
+        try:
+            self.conn.execute(
+                "UPDATE category_rules SET pattern = ?, category_id = ?, tags = ?,"
+                " updated_at = ? WHERE id = ?",
+                (
+                    pattern,
+                    target,
+                    json.dumps(tag_names, ensure_ascii=False),
+                    now_iso(),
+                    int(rule_id),
+                ),
+            )
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            raise ValueError("同样的匹配规则已存在") from None
+
+    def delete_category_rule(self, rule_id: int) -> None:
+        self.conn.execute(
+            "DELETE FROM category_rules WHERE id = ?", (int(rule_id),)
+        )
+        self.conn.commit()
+
+    def match_category_rule(self, payee: str, kind: str) -> CategoryRule | None:
+        text = str(payee or "").strip().casefold()
+        if not text:
+            return None
+        matches = [
+            rule
+            for rule in self.category_rules()
+            if rule.kind == kind and rule.pattern.casefold() in text
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda rule: (len(rule.pattern), -rule.id))
+
+    def record_rule_hit(self, rule_id: int) -> None:
+        self.conn.execute(
+            "UPDATE category_rules SET hit_count = hit_count + 1, updated_at = ?"
+            " WHERE id = ?",
+            (now_iso(), int(rule_id)),
+        )
+        self.conn.commit()
+
+    def learn_category_rules(self, min_count: int = 2) -> int:
+        """Create rules for payees that always used one category and tag set."""
+        rows = self.conn.execute(
+            "SELECT lower(payee) AS key, MIN(payee) AS payee, kind, category_id,"
+            "       COUNT(*) AS n"
+            " FROM transactions"
+            " WHERE kind IN ('expense','income') AND payee <> ''"
+            "   AND category_id IS NOT NULL AND refund_of_id IS NULL"
+            "   AND NOT EXISTS (SELECT 1 FROM transaction_splits s"
+            "                   WHERE s.transaction_id = transactions.id)"
+            " GROUP BY lower(payee), kind, category_id"
+            " ORDER BY n DESC"
+        ).fetchall()
+        groups: dict[tuple[str, str], dict[str, object]] = {}
+        for row in rows:
+            key = (str(row["key"]), str(row["kind"]))
+            bucket = groups.setdefault(
+                key,
+                {"payee": row["payee"], "cats": {}, "total": 0},
+            )
+            cats = bucket["cats"]  # type: ignore[assignment]
+            cats[int(row["category_id"])] = int(row["n"])  # type: ignore[index]
+            bucket["total"] = int(bucket["total"]) + int(row["n"])
+        created = 0
+        for (_, kind), bucket in groups.items():
+            cats = bucket["cats"]  # type: ignore[assignment]
+            if len(cats) != 1 or int(bucket["total"]) < max(2, int(min_count)):
+                continue
+            category_id = next(iter(cats))
+            try:
+                self.add_category_rule(
+                    str(bucket["payee"]), kind, int(category_id)
+                )
+            except ValueError:
+                continue
+            created += 1
+        return created
+
+    def apply_rule_tags_to_history(self, rule_id: int | None = None) -> int:
+        """Merge each rule's tags into matching historical transactions."""
+        rules = [rule for rule in self.category_rules() if rule.tags]
+        if rule_id is not None:
+            rules = [rule for rule in rules if rule.id == int(rule_id)]
+        if not rules:
+            return 0
+        rows = self.conn.execute(
+            "SELECT id, payee, kind FROM transactions"
+            " WHERE payee <> '' AND kind IN ('expense','income')"
+        ).fetchall()
+        changed = 0
+        with self.db.transaction() as conn:
+            for row in rows:
+                text = str(row["payee"] or "").casefold()
+                matches = [
+                    rule
+                    for rule in rules
+                    if rule.kind == row["kind"] and rule.pattern.casefold() in text
+                ]
+                if not matches:
+                    continue
+                rule = max(matches, key=lambda item: (len(item.pattern), -item.id))
+                existing = [
+                    str(item["name"])
+                    for item in conn.execute(
+                        "SELECT t.name FROM tags t"
+                        " JOIN transaction_tags tt ON tt.tag_id = t.id"
+                        " WHERE tt.transaction_id = ?",
+                        (int(row["id"]),),
+                    )
+                ]
+                merged = self._normalize_tags([*existing, *rule.tags])
+                if merged == self._normalize_tags(existing):
+                    continue
+                self._replace_tags(int(row["id"]), merged)
+                changed += 1
+        return changed
+
     # -------------------------------------------------------------- bulk / CSV
     def insert_normalized(self, rows: Iterable[dict]) -> int:
         """Insert already-validated rows in one transaction (used by CSV import)."""
@@ -2877,13 +3406,16 @@ class Repository:
     def clear_all(self, *, seed_defaults: bool = True) -> None:
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM transactions")
+            conn.execute("DELETE FROM category_rules")
+            conn.execute("DELETE FROM undo_log")
             conn.execute("DELETE FROM budgets")
             conn.execute("DELETE FROM accounts")
             conn.execute("DELETE FROM categories")
             conn.execute("DELETE FROM fixed_assets")
             conn.execute(
                 "DELETE FROM sqlite_sequence WHERE name IN"
-                " ('transactions','budgets','accounts','categories')"
+                " ('transactions','budgets','accounts','categories',"
+                "  'category_rules','undo_log')"
             )
             if seed_defaults:
                 Database._seed_defaults(conn)

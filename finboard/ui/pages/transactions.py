@@ -53,7 +53,7 @@ class TransactionsPage(Page):
         export_button = ThemedButton(t("导出 CSV"), "secondary", "download")
         export_button.clicked.connect(self._export)
         self.undo_button = ThemedButton(t("撤销"), "ghost", "refresh")
-        self.undo_button.setToolTip(t("撤销上一笔批量修改"))
+        self.undo_button.setToolTip(t("撤销上一步操作（Ctrl+Z）"))
         self.undo_button.setEnabled(False)
         self.undo_button.clicked.connect(self._undo)
         record_button = ThemedButton(t("记一笔"), "primary", "plus")
@@ -394,10 +394,16 @@ class TransactionsPage(Page):
         edit.triggered.connect(lambda: self.window.open_transaction(transaction))
         metadata = QAction(t("标签、拆分与附件…"), menu)
         metadata.triggered.connect(lambda: self._open_metadata(transaction))
-        remove = QAction(t("删除记录"), menu)
-        remove.triggered.connect(lambda: self._delete(transaction))
         menu.addAction(edit)
         menu.addAction(metadata)
+        if transaction.kind == "expense":
+            refund = QAction(t("登记退款…"), menu)
+            refund.triggered.connect(
+                lambda: self.window.refund_transaction(transaction)
+            )
+            menu.addAction(refund)
+        remove = QAction(t("删除记录"), menu)
+        remove.triggered.connect(lambda: self._delete(transaction))
         menu.addSeparator()
         menu.addAction(remove)
         menu.exec(self.table.viewport().mapToGlobal(position))
@@ -436,7 +442,7 @@ class TransactionsPage(Page):
 
     def _export(self) -> None:
         month = self.month_combo.current_month() or t("全部")
-        default = Path.home() / "Desktop" / f"FinBoard-收入支出-{month}.csv"
+        default = Path.home() / "Desktop" / t("FinBoard-收入支出-{month}.csv", month=month)
         path, _ = QFileDialog.getSaveFileName(
             self, t("导出收支明细"), str(default), t("CSV 文件 (*.csv)")
         )

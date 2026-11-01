@@ -282,6 +282,7 @@ class MainWindow(QMainWindow):
         bindings = [
             ("Ctrl+N", self.open_transaction),
             ("Ctrl+F", self._focus_search),
+            ("Ctrl+Z", self.undo_last),
             ("Ctrl+,", lambda: self.navigate("settings")),
         ]
         for sequence, callback in bindings:
@@ -387,6 +388,27 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ dialogs
     def open_transaction(self, transaction: Transaction | None = None) -> None:
         dialog = TransactionDialog(self.service, transaction, parent=self)
+        localize_widgets(dialog)
+        dialog.exec()
+
+    def undo_last(self) -> None:
+        try:
+            if not self.service.has_undo():
+                self.notify(t("没有可撤销的操作"))
+                return
+            message = self.service.undo_last()
+        except ValueError as exc:
+            self.notify(str(exc))
+            return
+        self.notify(message)
+
+    def refund_transaction(self, transaction: Transaction) -> None:
+        dialog = TransactionDialog(
+            self.service,
+            parent=self,
+            default_kind="income",
+            refund_of=transaction,
+        )
         localize_widgets(dialog)
         dialog.exec()
 
