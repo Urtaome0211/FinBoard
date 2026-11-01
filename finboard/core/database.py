@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -291,6 +291,24 @@ CREATE INDEX IF NOT EXISTS idx_undo_log_created ON undo_log(created_at, id);
 """
 
 
+SCHEMA_V12 = """
+CREATE TABLE IF NOT EXISTS fixed_assets (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT    NOT NULL,
+    type           TEXT    NOT NULL CHECK (type IN ('property','vehicle','other')),
+    purchase_price INTEGER NOT NULL DEFAULT 0 CHECK (purchase_price >= 0),
+    current_value  INTEGER NOT NULL DEFAULT 0 CHECK (current_value >= 0),
+    valuation_date TEXT    NOT NULL,
+    currency       TEXT    NOT NULL DEFAULT 'CNY',
+    note           TEXT    NOT NULL DEFAULT '',
+    created_at     TEXT    NOT NULL,
+    updated_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_fixed_assets_value ON fixed_assets(current_value);
+"""
+
+
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
 
@@ -360,6 +378,9 @@ class Database:
         if version < 11:
             conn.executescript(SCHEMA_V11)
             version = 11
+        if version < 12:
+            conn.executescript(SCHEMA_V12)
+            version = 12
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

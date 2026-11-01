@@ -6,6 +6,7 @@ from .bulk_edit import BulkEditDialog
 from .category_dialog import CategoryDialog
 from .category_manager import CategoryManagerDialog
 from .csv_import import CsvImportDialog
+from .fixed_asset_dialog import FixedAssetDialog
 from .goal_dialog import GoalDepositDialog, GoalDialog
 from .holdings_dialog import HoldingDialog, HoldingsDialog
 from .metadata_dialog import MetadataDialog
@@ -21,6 +22,7 @@ __all__ = [
     "CategoryDialog",
     "CategoryManagerDialog",
     "CsvImportDialog",
+    "FixedAssetDialog",
     "GoalDepositDialog",
     "GoalDialog",
     "HoldingDialog",

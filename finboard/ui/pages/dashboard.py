@@ -62,13 +62,15 @@ class DashboardPage(Page):
         middle.setSpacing(18)
         self.worth_card = Card(padding=20, spacing=10)
         self.worth_card.setFixedWidth(392)
-        self.worth_card.add_header("资产与负债", "存款与负债占总额的百分比")
+        self.worth_card.add_header("资产与负债", "存款、固定资产与负债占总额的百分比")
         self.donut = DonutChart()
         self.donut.setFixedSize(196, 196)
         self.worth_card.body.addWidget(self.donut, 0, Qt.AlignmentFlag.AlignHCenter)
         self.asset_legend = LegendRow(colors().income, "存款 / 资产")
+        self.fixed_legend = LegendRow(colors().accent, "固定资产")
         self.liability_legend = LegendRow(colors().expense, "负债")
         self.worth_card.body.addWidget(self.asset_legend)
+        self.worth_card.body.addWidget(self.fixed_legend)
         self.worth_card.body.addWidget(self.liability_legend)
         self.worth_card.body.addStretch(1)
         middle.addWidget(self.worth_card)
@@ -153,8 +155,10 @@ class DashboardPage(Page):
         total = worth.assets + worth.liabilities
         palette = colors()
         segments = []
-        if worth.assets > 0:
-            segments.append((t("存款 / 资产"), worth.assets, palette.income))
+        if worth.account_assets > 0:
+            segments.append((t("存款 / 资产"), worth.account_assets, palette.income))
+        if worth.fixed_assets > 0:
+            segments.append((t("固定资产"), worth.fixed_assets, palette.accent))
         if worth.liabilities > 0:
             segments.append((t("负债"), worth.liabilities, palette.expense))
         self.donut.set_data(
@@ -164,8 +168,12 @@ class DashboardPage(Page):
             empty_text=t("还没有账户数据"),
         )
         self.asset_legend.set_data(
-            money(worth.assets), f"{percentage(worth.assets, total):.1f}%"
+            money(worth.account_assets), f"{percentage(worth.account_assets, total):.1f}%"
         )
+        self.fixed_legend.set_data(
+            money(worth.fixed_assets), f"{percentage(worth.fixed_assets, total):.1f}%"
+        )
+        self.fixed_legend.setVisible(worth.fixed_assets > 0)
         self.liability_legend.set_data(
             money(worth.liabilities), f"{percentage(worth.liabilities, total):.1f}%"
         )

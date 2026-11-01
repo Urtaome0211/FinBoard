@@ -15,6 +15,7 @@ from .models import (
     Attachment,
     BulkResult,
     CsvRule,
+    FixedAsset,
     ForecastPoint,
     Holding,
     HoldingsSummary,
@@ -194,6 +195,60 @@ class FinanceService(QObject):
 
     def set_account_archived(self, account_id: int, archived: bool) -> None:
         self.repo.set_account_archived(account_id, archived)
+        self.changed.emit()
+
+    def fixed_assets(self) -> list[FixedAsset]:
+        return self.repo.fixed_assets()
+
+    def add_fixed_asset(
+        self,
+        name: str,
+        type_: str,
+        purchase_price: int,
+        current_value: int,
+        valuation_date: str,
+        *,
+        currency: str = "CNY",
+        note: str = "",
+    ) -> int:
+        asset_id = self.repo.add_fixed_asset(
+            name,
+            type_,
+            purchase_price,
+            current_value,
+            valuation_date,
+            currency=currency,
+            note=note,
+        )
+        self.changed.emit()
+        return asset_id
+
+    def update_fixed_asset(
+        self,
+        asset_id: int,
+        *,
+        name: str,
+        type_: str,
+        purchase_price: int,
+        current_value: int,
+        valuation_date: str,
+        currency: str = "CNY",
+        note: str = "",
+    ) -> None:
+        self.repo.update_fixed_asset(
+            asset_id,
+            name=name,
+            type_=type_,
+            purchase_price=purchase_price,
+            current_value=current_value,
+            valuation_date=valuation_date,
+            currency=currency,
+            note=note,
+        )
+        self.changed.emit()
+
+    def delete_fixed_asset(self, asset_id: int) -> None:
+        self.repo.delete_fixed_asset(asset_id)
         self.changed.emit()
 
     def valuations(

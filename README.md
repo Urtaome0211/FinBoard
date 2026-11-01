@@ -22,6 +22,7 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 - **总览**：净资产、本月收入/支出/结余、资产与负债百分比环图、近 6 个月趋势、最近记录、预算进度。
 - **收支明细**：按月份、类型、账户、分类、标签筛选，支持关键词搜索；每笔显示对应账户动账后的余额（转账显示转出账户余额）；双击编辑、右键删除、Delete 删除；支持拆分、标签、附件与 CSV 导出；多选后批量改分类/加移除标签，可撤销上一笔批量修改。
 - **账户**：现金、储蓄卡、投资理财、信用卡、贷款五类账户；每个账户可设自己的币种；实时余额由期初余额和流水聚合得出；信用卡/贷款按欠款金额（正数）录入，自动计入负债；支持归档与恢复。
+- **固定资产**：登记房产、车辆等长期资产，记录购买价、当前估值和估值日期；计入总资产/净资产与结构环图，不计入可用现金、预算和现金流预测。
 - **投资市值**：投资理财账户可按日记录收盘总市值，账户余额自动变为「最新市值 + 市值日之后的流水」；带历史曲线、同日覆盖、删除重算，市值变动不计入收支。
 - **多币种**：账户级 + 交易级币种；按每个交易日的汇率折算后汇总，周末和节假日沿用最近一个工作日；基准币种可切换，总览/报表/预算统一按基准币种显示。
 - **钱包提现手续费**：从「支付宝钱包」或「微信钱包」转出时，按 0.1% 自动扣手续费（支付宝最低 ¥0.10，微信最低 ¥0.01）；全部提现时手续费包含在提现金额中，部分提现时从剩余余额另扣；可勾选「本次豁免手续费」。手续费计入支出统计，报表中归入「提现手续费」。
@@ -50,9 +51,9 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 | --- | --- |
 | ![收支明细](docs/screenshots/transactions.png) | ![账户](docs/screenshots/accounts.png) |
 
-| 预算 | 报表 |
+| 固定资产 | 报表 |
 | --- | --- |
-| ![预算](docs/screenshots/budgets.png) | ![报表](docs/screenshots/reports.png) |
+| ![固定资产](docs/screenshots/fixed-assets.png) | ![报表](docs/screenshots/reports.png) |
 
 | 批量编辑 | 批量修改对话框 |
 | --- | --- |
@@ -173,6 +174,7 @@ dist\FinBoard\FinBoard.exe --version
 11. **登记持仓与现金**：在投资账户行点「持仓」图标，添加名称、代码、数量、成本价和现价；点「调整现金」填写未投入持仓的现金，账户总值会按「现金 + 持仓市值」显示；点「按市值校准账户」把账户总值写成当天的市值快照。
 12. **设储蓄目标**：在「储蓄」页新建目标，填写目标金额、已存金额和可选日期；在目标行点「+」存入，点铅笔编辑，点垃圾桶删除。
 13. **看现金流预测**：在「预测」页选择未来 3/6/12 个月，查看预测曲线和逐月表；期初现金只算现金/储蓄卡账户，定期收支按计划日期投影，转账不计入。
+14. **登记固定资产**：在「固定资产」页新增房产、车辆或其他长期资产，填写购买价、当前估值和估值日期；估值只影响总资产/净资产与结构环图，不生成收支、不进入预算和现金流预测。
 
 快捷键：
 
@@ -181,7 +183,7 @@ dist\FinBoard\FinBoard.exe --version
 | `Ctrl+N` | 记一笔 |
 | `Ctrl+F` | 全局搜索 |
 | `Ctrl+,` | 设置 |
-| `Ctrl+1` … `Ctrl+8` | 总览 / 收支明细 / 账户 / 预算 / 储蓄 / 预测 / 定期 / 报表 |
+| `Ctrl+1` … `Ctrl+9` | 总览 / 收支明细 / 账户 / 固定资产 / 预算 / 储蓄 / 预测 / 定期 / 报表 |
 | `Delete` | 删除选中的收支记录 |
 
 ### CSV 格式
@@ -253,7 +255,7 @@ finboard/
 │   ├── rows.py             # 交易/账户列表行
 │   ├── main_window.py      # 侧栏、顶栏、页面路由
 │   ├── dialogs/            # 记账、账户、市值、持仓、储蓄、分类、预算、定期、对账、CSV、元数据
-│   └── pages/              # 总览、明细、账户、预算、储蓄、预测、定期、报表、设置
+│   └── pages/              # 总览、明细、账户、固定资产、预算、储蓄、预测、定期、报表、设置
 ├── resources/              # 图标、勾选/下拉 SVG
 └── __main__.py
 tests/test_core.py          # 金额/日期/仓储/CSV/服务层测试
@@ -268,6 +270,7 @@ tests/test_v21.py           # 持仓、预算结转、储蓄目标、现金流�
 tests/test_v21_ui.py        # 持仓/储蓄目标对话框
 tests/test_v30.py           # schema v10、拆分/标签/附件、CSV 规则、Excel 导出
 tests/test_v40.py           # 持仓已实现收益/分红、批量编辑与撤销
+tests/test_v41.py           # 固定资产 CRUD、估值折算与净值
 scripts/                    # 冒烟、截图、图标生成
 docs/                       # 截图与 logo
 run.py                      # 源码入口
@@ -294,7 +297,7 @@ FinBoard.spec               # PyInstaller 构建配置
 ### 测试与构建
 
 ```bash
-# 单元测试（102 个）
+# 单元测试（109 个）
 python -m unittest discover -s tests
 
 # 核心冒烟（临时数据库、演示数据、CSV 往返）
@@ -319,6 +322,7 @@ python -m PyInstaller FinBoard.spec --noconfirm --clean
 - 提现手续费只对账户名为「支付宝钱包 / 微信钱包」（或「支付宝 / 微信」）的人民币账户自动计算；改名或使用其他名称不会计费。手续费规则是内置的，不随支付宝/微信官方调整自动更新。CSV 不保存「豁免 / 全部提现」标记，导入钱包转账时会按金额和账户余额重新计算，导入后请复核。
 - 定期交易不会在后台自动入账，必须到「定期」页确认；这是为了避免程序未运行时错过日期却静默改账。
 - 账户对账只对普通账户开放；投资账户请用市值快照校准。对账调整不写入收支，删除对账历史会撤销对应差额。
+- 固定资产只记录购买价和当前估值，不做折旧、贷款关联或处置；首版也不支持附件。
 - 单用户、单机；没有登录、加密或云同步。
 - 预算按自然月设置；只有勾选「结转到下月」的预算才会把正剩余带入下月，超支不结转。
 - 不直接连接银行/支付宝/微信账单，需通过 CSV 导入；自定义 CSV 规则只在导入时使用，不改变原始文件。
@@ -346,6 +350,7 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 - **Dashboard**: net worth, monthly income/expense/balance, asset-vs-liability donut, 6-month trend, recent transactions and budget progress.
 - **Transactions**: filter by month, kind, account, category and tag; search by payee/note; each row shows the account balance after that posting (transfers show the source account); edit, delete, split across categories, tag, attach receipts and export to CSV; select multiple rows to change category or add/remove tags in bulk, and undo the last bulk edit.
 - **Accounts**: cash, debit card, investment, credit card and loan accounts, each with its own currency. Balances are aggregated from the opening balance and transactions in real time. Archive and restore are supported.
+- **Fixed assets**: track property, vehicles and other long-lived assets with purchase price, current value and valuation date. They count toward total assets and net worth, and appear as a separate donut segment; they are excluded from liquid cash, budgets and cash-flow forecasts.
 - **Investment valuations**: record a closing market value per day for investment accounts. The balance becomes “latest snapshot + later transactions”, with a history chart, same-day overwrite and delete-to-recalculate. Market moves are not counted as income or expense.
 - **Multi-currency**: account-level and transaction-level currencies. Amounts are converted at the transaction-date rate, with weekend/holiday fallback to the latest business day. The base currency can be switched; dashboard, reports and budgets are shown in it.
 - **Wallet withdrawal fees**: transfers out of “支付宝钱包” or “微信钱包” automatically add a 0.1% fee (minimum ¥0.10 for Alipay, ¥0.01 for WeChat). A full withdrawal includes the fee in the withdrawn amount; a partial withdrawal deducts it from the remaining balance. Tick “Waive fee” to skip it for one transfer. Fees are counted as expenses and grouped under “提现手续费” in reports.
@@ -374,9 +379,9 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 | --- | --- |
 | ![Transactions](docs/screenshots/transactions.png) | ![Accounts](docs/screenshots/accounts.png) |
 
-| Budgets | Reports |
+| Fixed assets | Reports |
 | --- | --- |
-| ![Budgets](docs/screenshots/budgets-en.png) | ![Reports](docs/screenshots/reports-en.png) |
+| ![Fixed assets](docs/screenshots/fixed-assets-en.png) | ![Reports](docs/screenshots/reports-en.png) |
 
 | Bulk selection | Bulk edit |
 | --- | --- |
@@ -491,6 +496,7 @@ dist\FinBoard\FinBoard.exe --version
 11. **Track holdings and cash** from the chart icon on an investment account: add name, symbol, quantity, cost price and current price. Use “Adjust cash” for uninvested cash; the account total is cash plus holdings. Review cost/market value/P&L, then click “Revalue account” to write the total as today’s valuation snapshot.
 12. **Set a savings goal** on the Savings page: enter a target, saved amount and optional date. Use “+” to deposit, the pencil to edit and the trash icon to delete.
 13. **Review the cash-flow forecast** on the Forecast page for the next 3/6/12 months. Starting cash includes only cash/debit accounts; recurring rules project on their scheduled dates and transfers are excluded.
+14. **Register fixed assets** on the Fixed assets page: name, type, purchase price, current value and valuation date. Valuations affect total assets/net worth and the structure donut only; they never create income/expense rows and are excluded from budgets and forecasts.
 
 Shortcuts:
 
@@ -499,7 +505,7 @@ Shortcuts:
 | `Ctrl+N` | New transaction |
 | `Ctrl+F` | Global search |
 | `Ctrl+,` | Settings |
-| `Ctrl+1` … `Ctrl+8` | Dashboard / Transactions / Accounts / Budgets / Savings / Forecast / Recurring / Reports |
+| `Ctrl+1` … `Ctrl+9` | Dashboard / Transactions / Accounts / Fixed assets / Budgets / Savings / Forecast / Recurring / Reports |
 | `Delete` | Delete selected transaction |
 
 ### CSV format
@@ -553,7 +559,7 @@ Default location on Windows:
 ### Testing & build
 
 ```bash
-# 102 unit tests
+# 109 unit tests
 python -m unittest discover -s tests
 
 # Core smoke test (temporary DB, demo data, CSV round-trip)
@@ -578,8 +584,9 @@ Output: `dist/FinBoard/FinBoard.exe` (one-dir; ship the whole folder).
 - Withdrawal fees are calculated only for CNY accounts named “支付宝钱包 / 微信钱包” (or “支付宝 / 微信”). Renaming an account or using a different name disables the rule. The rates are built in and do not update when Alipay/WeChat change their policy. CSV does not carry the waiver/full-withdrawal flags, so imported wallet transfers are recalculated from their amount and account balance; check them after importing.
 - Recurring transactions never post in the background; confirm them on the Recurring page. This avoids silently changing the books when a scheduled date passes while the app is closed.
 - Reconciliation is available for non-investment accounts only. Use valuation snapshots for investments; deleting a reconciliation reverses its adjustment.
+- Fixed assets store purchase price and current value only; there is no depreciation, linked mortgage, disposal or attachments in this version.
 - Single-user, single-machine: no login, encryption or cloud sync.
-- Budgets are per calendar month and do not roll over.
+- Budgets are per calendar month and roll over only when explicitly enabled; overspending never rolls over.
 - No direct bank/Alipay/WeChat sync; use CSV import. Custom CSV rules are used only during import and never modify the source file.
 - Splits, tags and attachments are local data. Attachments are copied into the data folder without encryption; back up `attachments/` together with the database.
 - CSV duplicate detection uses date, kind, amount, currency, account, destination account and payee, not the note; review these fields before re-importing a file.

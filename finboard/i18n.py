@@ -61,6 +61,12 @@ ACCOUNT_TYPE_EN = {
     "贷款": "Loan",
 }
 
+FIXED_ASSET_TYPE_EN = {
+    "房产": "Property",
+    "车辆": "Vehicle",
+    "其他": "Other",
+}
+
 # Dynamic strings are formatted before reaching the lookup.  These patterns
 # cover the common shapes so composed labels do not stay Chinese.
 _DYNAMIC = (
@@ -183,6 +189,12 @@ def category_display(name: str) -> str:
 def account_type_display(label: str) -> str:
     if is_english():
         return ACCOUNT_TYPE_EN.get(label, t(label))
+    return label
+
+
+def fixed_asset_type_display(label: str) -> str:
+    if is_english():
+        return FIXED_ASSET_TYPE_EN.get(label, t(label))
     return label
 
 

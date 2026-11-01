@@ -25,6 +25,7 @@ from finboard.ui.dialogs import (  # noqa: E402
     BudgetDialog,
     CategoryManagerDialog,
     GoalDialog,
+    FixedAssetDialog,
     HoldingDialog,
     HoldingsDialog,
     ReconcileDialog,
@@ -72,6 +73,8 @@ def main() -> int:
         )
 
         service = FinanceService(repo, "CNY")
+        repo.add_fixed_asset("Primary home", "property", 12_000_000, 15_000_000, "2026-10-31", note="3 bedrooms")
+        repo.add_fixed_asset("Family car", "vehicle", 1_800_000, 1_200_000, "2026-10-31", note="2022")
         window = MainWindow(service, settings)
         window.resize(1440, 900)
         window.show()
@@ -82,6 +85,7 @@ def main() -> int:
             "dashboard",
             "transactions",
             "accounts",
+            "fixed_assets",
             "budgets",
             "savings",
             "forecast",

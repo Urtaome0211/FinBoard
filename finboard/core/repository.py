@@ -40,6 +40,8 @@ from .models import (
     CategorySpend,
     CsvRule,
     FALLBACK_CATEGORY,
+    FIXED_ASSET_TYPE_META,
+    FixedAsset,
     ForecastPoint,
     Holding,
     HoldingsSummary,
@@ -1157,6 +1159,119 @@ class Repository:
                 "SELECT COUNT(*) FROM holdings WHERE account_id = ?", (account_id,)
             ).fetchone()[0]
         )
+
+    # ------------------------------------------------------------ fixed assets
+    @staticmethod
+    def _fixed_asset(row: sqlite3.Row) -> FixedAsset:
+        return FixedAsset(
+            id=int(row["id"]),
+            name=row["name"],
+            type=row["type"],
+            purchase_price=int(row["purchase_price"]),
+            current_value=int(row["current_value"]),
+            valuation_date=row["valuation_date"],
+            currency=row["currency"] or "CNY",
+            note=row["note"] or "",
+            created_at=row["created_at"] or "",
+        )
+
+    def _validate_fixed_asset(
+        self,
+        name: str,
+        type_: str,
+        purchase_price: int,
+        current_value: int,
+        valuation_date: str,
+        currency: str,
+        note: str,
+    ) -> tuple[str, str, int, int, str, str, str]:
+        name = self._clean_name(name, "资产名称", 60)
+        if type_ not in FIXED_ASSET_TYPE_META:
+            raise ValueError("不支持的固定资产类型")
+        purchase_price = int(purchase_price)
+        current_value = int(current_value)
+        if purchase_price < 0 or current_value < 0:
+            raise ValueError("资产金额不能为负数")
+        if purchase_price > MAX_AMOUNT_CENTS or current_value > MAX_AMOUNT_CENTS:
+            raise ValueError("金额过大")
+        valuation_date = normalize_day(valuation_date)
+        if currency not in CURRENCIES:
+            raise ValueError("不支持的币种")
+        note = str(note or "").strip()
+        if len(note) > 200:
+            raise ValueError("备注不能超过 200 个字符")
+        return name, type_, purchase_price, current_value, valuation_date, currency, note
+
+    def fixed_assets(self) -> list[FixedAsset]:
+        rows = self.conn.execute(
+            "SELECT * FROM fixed_assets ORDER BY current_value DESC, id"
+        ).fetchall()
+        return [self._fixed_asset(row) for row in rows]
+
+    def get_fixed_asset(self, asset_id: int) -> FixedAsset:
+        row = self.conn.execute(
+            "SELECT * FROM fixed_assets WHERE id = ?", (asset_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError("固定资产不存在")
+        return self._fixed_asset(row)
+
+    def add_fixed_asset(
+        self,
+        name: str,
+        type_: str,
+        purchase_price: int,
+        current_value: int,
+        valuation_date: str,
+        *,
+        currency: str = "CNY",
+        note: str = "",
+    ) -> int:
+        values = self._validate_fixed_asset(
+            name, type_, purchase_price, current_value, valuation_date, currency, note
+        )
+        stamp = now_iso()
+        cursor = self.conn.execute(
+            "INSERT INTO fixed_assets"
+            " (name, type, purchase_price, current_value, valuation_date, currency, note, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (*values, stamp),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def update_fixed_asset(
+        self,
+        asset_id: int,
+        *,
+        name: str,
+        type_: str,
+        purchase_price: int,
+        current_value: int,
+        valuation_date: str,
+        currency: str = "CNY",
+        note: str = "",
+    ) -> None:
+        self.get_fixed_asset(asset_id)
+        values = self._validate_fixed_asset(
+            name, type_, purchase_price, current_value, valuation_date, currency, note
+        )
+        self.conn.execute(
+            "UPDATE fixed_assets SET name=?, type=?, purchase_price=?, current_value=?,"
+            " valuation_date=?, currency=?, note=?, updated_at=? WHERE id=?",
+            (*values, now_iso(), asset_id),
+        )
+        self.conn.commit()
+
+    def delete_fixed_asset(self, asset_id: int) -> None:
+        self.conn.execute("DELETE FROM fixed_assets WHERE id = ?", (asset_id,))
+        self.conn.commit()
+
+    def fixed_asset_value(self) -> int:
+        total = 0
+        for asset in self.fixed_assets():
+            total += self._to_base(asset.current_value, asset.currency, asset.valuation_date)
+        return total
 
     # --------------------------------------------------------------- savings
     @staticmethod
@@ -2351,7 +2466,7 @@ class Repository:
 
     def net_worth(self) -> NetWorth:
         accounts = self.accounts(include_archived=False)
-        assets = 0
+        account_assets = 0
         liabilities = 0
         for account in accounts:
             value = self._to_base(account.balance, account.currency)
@@ -2360,10 +2475,14 @@ class Repository:
                 # opening balance must not silently turn debt into an asset.
                 liabilities += abs(value)
             else:
-                assets += value
+                account_assets += value
+        fixed = self.fixed_assets()
+        fixed_total = self.fixed_asset_value()
         return NetWorth(
-            assets=assets,
+            account_assets=account_assets,
             liabilities=liabilities,
+            fixed_assets=fixed_total,
+            fixed_asset_count=len(fixed),
             asset_accounts=sum(1 for account in accounts if account.group == "asset"),
             liability_accounts=sum(1 for account in accounts if account.group == "liability"),
         )
@@ -2761,6 +2880,7 @@ class Repository:
             conn.execute("DELETE FROM budgets")
             conn.execute("DELETE FROM accounts")
             conn.execute("DELETE FROM categories")
+            conn.execute("DELETE FROM fixed_assets")
             conn.execute(
                 "DELETE FROM sqlite_sequence WHERE name IN"
                 " ('transactions','budgets','accounts','categories')"

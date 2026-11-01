@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 
 from ...core.models import Account
+from ...i18n import t
 from ..dialogs import HoldingsDialog, ReconcileDialog, ValuationDialog
 from ..rows import AccountRow
 from ..widgets import (
@@ -75,7 +76,13 @@ class AccountsPage(Page):
         worth = self.service.repo.net_worth()
         money = self.service.format
         self.asset_card.set_value(
-            money(worth.assets), hint=f"{worth.asset_accounts} 个资产账户", tone="text"
+            money(worth.assets),
+            hint=t(
+                "{count} 个资产账户 · 固定资产 {fixed}",
+                count=worth.asset_accounts,
+                fixed=money(worth.fixed_assets),
+            ),
+            tone="text",
         )
         self.liability_card.set_value(
             money(worth.liabilities),

@@ -113,6 +113,16 @@ _ICON_PATHS: dict[str, str] = {
         '<path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/>'
     ),
     "tag": '<path d="M3 12V4h8l10 10-8 8L3 12Z"/><path d="M8 8h.01"/>',
+    "home": (
+        '<path d="M3 11.5 12 4l9 7.5"/>'
+        '<path d="M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9"/>'
+        '<path d="M9.5 20v-5.5h5V20"/>'
+    ),
+    "car": (
+        '<path d="M5 16h14l-1.4-4.5a2 2 0 0 0-1.9-1.5H8.3a2 2 0 0 0-1.9 1.5L5 16Z"/>'
+        '<path d="M4 16v3h2.5v-1.5h11V19H20v-3"/>'
+        '<circle cx="7.5" cy="16" r="1"/><circle cx="16.5" cy="16" r="1"/>'
+    ),
 }
 
 _APP_SVG = """

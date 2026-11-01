@@ -125,15 +125,17 @@ class ReportsPage(Page):
         donuts = QHBoxLayout()
         donuts.setSpacing(18)
         self.worth_card = Card(padding=20, spacing=10)
-        self.worth_card.add_header("资产与负债", "存款、投资与欠款的比例")
+        self.worth_card.add_header("资产与负债", "存款、投资、固定资产与欠款的比例")
         self.worth_chart = DonutChart()
         self.worth_chart.setMinimumHeight(220)
         self.worth_card.body.addWidget(self.worth_chart, 1)
         self.worth_legend = QVBoxLayout()
         self.worth_legend.setSpacing(8)
         self.asset_legend = LegendRow(colors().primary, "存款 / 资产")
+        self.fixed_legend = LegendRow(colors().accent, "固定资产")
         self.liability_legend = LegendRow(colors().expense, "负债")
         self.worth_legend.addWidget(self.asset_legend)
+        self.worth_legend.addWidget(self.fixed_legend)
         self.worth_legend.addWidget(self.liability_legend)
         self.worth_card.body.addLayout(self.worth_legend)
         donuts.addWidget(self.worth_card, 1)
@@ -230,19 +232,25 @@ class ReportsPage(Page):
 
     def _refresh_worth(self, worth, money) -> None:
         total = worth.assets + worth.liabilities
-        segments = [
-            (t("存款 / 资产"), worth.assets, colors().primary),
-            (t("负债"), worth.liabilities, colors().expense),
-        ]
+        segments = []
+        if worth.account_assets > 0:
+            segments.append((t("存款 / 资产"), worth.account_assets, colors().primary))
+        if worth.fixed_assets > 0:
+            segments.append((t("固定资产"), worth.fixed_assets, colors().accent))
+        if worth.liabilities > 0:
+            segments.append((t("负债"), worth.liabilities, colors().expense))
         self.worth_chart.set_data(
             segments,
             center_title=t("净资产"),
             center_value=money(worth.net),
             empty_text=t("暂无资产或负债"),
         )
-        asset_pct = worth.assets / total * 100 if total else 0
+        asset_pct = worth.account_assets / total * 100 if total else 0
+        fixed_pct = worth.fixed_assets / total * 100 if total else 0
         liability_pct = worth.liabilities / total * 100 if total else 0
-        self.asset_legend.set_data(money(worth.assets), f"{asset_pct:.1f}%")
+        self.asset_legend.set_data(money(worth.account_assets), f"{asset_pct:.1f}%")
+        self.fixed_legend.set_data(money(worth.fixed_assets), f"{fixed_pct:.1f}%")
+        self.fixed_legend.setVisible(worth.fixed_assets > 0)
         self.liability_legend.set_data(money(worth.liabilities), f"{liability_pct:.1f}%")
 
     def _refresh_expense_pie(

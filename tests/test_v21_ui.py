@@ -15,6 +15,7 @@ from finboard.core.database import Database  # noqa: E402
 from finboard.core.repository import Repository  # noqa: E402
 from finboard.core.service import FinanceService  # noqa: E402
 from finboard.i18n import set_language  # noqa: E402
+from finboard.ui.dialogs.fixed_asset_dialog import FixedAssetDialog  # noqa: E402
 from finboard.ui.dialogs.goal_dialog import GoalDepositDialog, GoalDialog  # noqa: E402
 from finboard.ui.dialogs.holdings_dialog import CashDialog, HoldingDialog  # noqa: E402
 from finboard.ui.widgets import EmptyState, PageHeader  # noqa: E402
@@ -118,6 +119,19 @@ class V21DialogTests(unittest.TestCase):
             account = self.repo.get_account(account_id)
             self.assertEqual(account.cash_balance, 500_000)
             self.assertEqual(account.balance, 5_000_000)
+        finally:
+            dialog.deleteLater()
+
+    def test_fixed_asset_dialog_saves_with_button(self) -> None:
+        dialog = FixedAssetDialog(self.service)
+        try:
+            dialog.name_input.setText("自住房")
+            dialog.purchase_input.setText("1200000")
+            dialog.value_input.setText("1500000")
+            dialog.save_button.click()
+            self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+            self.assertEqual(len(self.repo.fixed_assets()), 1)
+            self.assertEqual(self.repo.fixed_assets()[0].current_value, 150_000_000)
         finally:
             dialog.deleteLater()
 

@@ -23,6 +23,13 @@ ACCOUNT_TYPE_META: dict[str, dict[str, str]] = {
 }
 ACCOUNT_TYPES = tuple(ACCOUNT_TYPE_META)
 
+FIXED_ASSET_TYPE_META: dict[str, dict[str, str]] = {
+    "property": {"label": "房产", "icon": "home"},
+    "vehicle": {"label": "车辆", "icon": "car"},
+    "other": {"label": "其他", "icon": "tag"},
+}
+FIXED_ASSET_TYPES = tuple(FIXED_ASSET_TYPE_META)
+
 DEFAULT_COLORS = (
     "#F2994A",
     "#5B8DEF",
@@ -409,13 +416,50 @@ class MonthStats:
 
 
 @dataclass(frozen=True)
+class FixedAsset:
+    id: int
+    name: str
+    type: str
+    purchase_price: int
+    current_value: int
+    valuation_date: str
+    currency: str = "CNY"
+    note: str = ""
+    created_at: str = ""
+
+    @property
+    def type_label(self) -> str:
+        return FIXED_ASSET_TYPE_META[self.type]["label"]
+
+    @property
+    def icon_name(self) -> str:
+        return FIXED_ASSET_TYPE_META[self.type]["icon"]
+
+    @property
+    def gain(self) -> int:
+        return self.current_value - self.purchase_price
+
+    @property
+    def gain_rate(self) -> float:
+        if self.purchase_price <= 0:
+            return 0.0
+        return round(self.gain / self.purchase_price * 100, 1)
+
+
+@dataclass(frozen=True)
 class NetWorth:
-    assets: int
+    account_assets: int
     liabilities: int
+    fixed_assets: int = 0
+    fixed_asset_count: int = 0
     net: int = field(init=False)
     liability_ratio: float = field(init=False)
     asset_accounts: int = 0
     liability_accounts: int = 0
+
+    @property
+    def assets(self) -> int:
+        return self.account_assets + self.fixed_assets
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "net", self.assets - self.liabilities)
