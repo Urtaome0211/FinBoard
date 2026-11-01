@@ -1004,5 +1004,8 @@
   "检查失败": "Integrity check failed",
   "FinBoard-收入支出-{month}.csv": "FinBoard-Income-Expense-{month}.csv",
   "手续费 已豁免": "Fee waived",
-  "（包含在提现金额中）": "(included in the withdrawal amount)"
+  "（包含在提现金额中）": "(included in the withdrawal amount)",
+  "已打开数据目录": "Opened the data folder",
+  "无法打开数据目录": "Couldn't open the data folder",
+  "请检查目录是否存在并可访问：{path}": "Check that this folder exists and is accessible: {path}"
 }

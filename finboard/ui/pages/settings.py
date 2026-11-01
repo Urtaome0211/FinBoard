@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -214,7 +217,9 @@ class SettingsPage(Page):
     def _build_data(self) -> None:
         card = Card(padding=20, spacing=14)
         card.add_header("数据", "全部保存在本机 SQLite 数据库中")
-        self.data_folder = Path(self.service.repo.db.path).parent
+        self.data_folder = (
+            Path(self.service.repo.db.path).expanduser().resolve().parent
+        )
         row = self._row("数据目录", str(self.data_folder))
         open_dir = ThemedButton("打开目录", "secondary", "database")
         open_dir.clicked.connect(self._open_data_dir)
@@ -433,7 +438,39 @@ class SettingsPage(Page):
         )
 
     def _open_data_dir(self) -> None:
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.data_folder)))
+        folder = Path(self.data_folder)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            self._report_open_failure(folder)
+            return
+
+        opened = False
+        if sys.platform == "win32":
+            try:
+                subprocess.Popen(["explorer.exe", str(folder)])
+                opened = True
+            except OSError:
+                try:
+                    os.startfile(str(folder))  # type: ignore[attr-defined]
+                    opened = True
+                except OSError:
+                    opened = False
+        if not opened:
+            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+        if not opened:
+            self._report_open_failure(folder)
+            return
+        self.window.notify("已打开数据目录")
+
+    def _report_open_failure(self, folder: Path) -> None:
+        ConfirmDialog.alert(
+            self,
+            t("无法打开数据目录"),
+            t("请检查目录是否存在并可访问：{path}", path=folder),
+            icon_name="alert",
+        )
 
     def _export(self) -> None:
         desktop = Path.home() / "Desktop"
