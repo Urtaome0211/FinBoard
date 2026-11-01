@@ -120,18 +120,19 @@ class RecurringRow(QFrame):
 
         actions = QHBoxLayout()
         actions.setSpacing(0)
-        post = IconButton("check", t("确认入账"), size=16)
+        post = IconButton("check", t("确认入账"), size=16, parent=self)
         post.setVisible(due)
         post.clicked.connect(lambda: self.post_requested.emit(self.rule))
-        edit = IconButton("edit", t("编辑规则"), size=16)
+        edit = IconButton("edit", t("编辑规则"), size=16, parent=self)
         edit.clicked.connect(lambda: self.edit_requested.emit(self.rule))
         toggle = IconButton(
             "archive" if rule.active else "refresh",
             t("暂停规则") if rule.active else t("启用规则"),
             size=16,
+            parent=self,
         )
         toggle.clicked.connect(lambda: self.toggle_requested.emit(self.rule))
-        delete = IconButton("trash", t("删除规则"), size=16)
+        delete = IconButton("trash", t("删除规则"), size=16, parent=self)
         delete.clicked.connect(lambda: self.delete_requested.emit(self.rule))
         for button in (post, edit, toggle, delete):
             button.setFixedSize(28, 28)

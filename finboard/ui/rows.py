@@ -241,22 +241,23 @@ class AccountRow(QFrame):
 
         actions = QHBoxLayout()
         actions.setSpacing(0)
-        holdings = IconButton("investment", t("持仓与成本"), size=16)
+        holdings = IconButton("investment", t("持仓与成本"), size=16, parent=self)
         holdings.setFixedSize(30, 30)
         holdings.setVisible(account.type == "investment" and not account.archived)
-        valuation = IconButton("chart", t("记录每日市值"), size=16)
+        valuation = IconButton("chart", t("记录每日市值"), size=16, parent=self)
         valuation.setFixedSize(30, 30)
         valuation.setVisible(account.type == "investment" and not account.archived)
-        reconcile = IconButton("check", t("对账校准余额"), size=16)
+        reconcile = IconButton("check", t("对账校准余额"), size=16, parent=self)
         reconcile.setFixedSize(30, 30)
         reconcile.setVisible(account.type != "investment" and not account.archived)
-        edit = IconButton("edit", t("编辑账户"), size=16)
+        edit = IconButton("edit", t("编辑账户"), size=16, parent=self)
         archive = IconButton(
             "refresh" if account.archived else "archive",
             t("恢复账户") if account.archived else t("归档账户"),
             size=16,
+            parent=self,
         )
-        delete = IconButton("trash", t("删除账户"), size=16)
+        delete = IconButton("trash", t("删除账户"), size=16, parent=self)
         for button in (holdings, valuation, reconcile, edit, archive, delete):
             button.setFixedSize(30, 30)
             actions.addWidget(button)

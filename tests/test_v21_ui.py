@@ -17,6 +17,7 @@ from finboard.core.service import FinanceService  # noqa: E402
 from finboard.i18n import set_language  # noqa: E402
 from finboard.ui.dialogs.goal_dialog import GoalDepositDialog, GoalDialog  # noqa: E402
 from finboard.ui.dialogs.holdings_dialog import CashDialog, HoldingDialog  # noqa: E402
+from finboard.ui.widgets import EmptyState, PageHeader  # noqa: E402
 
 
 class V21DialogTests(unittest.TestCase):
@@ -120,6 +121,16 @@ class V21DialogTests(unittest.TestCase):
         finally:
             dialog.deleteLater()
 
+    def test_header_and_empty_state_own_their_labels(self) -> None:
+        header = PageHeader("Title", "Subtitle")
+        empty = EmptyState("chart", "No data", "Add something")
+        try:
+            self.assertIs(header.title_label.parent(), header)
+            self.assertIs(header.subtitle_label.parent(), header)
+            self.assertIs(empty._hint.parent(), empty)
+        finally:
+            header.deleteLater()
+            empty.deleteLater()
 
 
 if __name__ == "__main__":
