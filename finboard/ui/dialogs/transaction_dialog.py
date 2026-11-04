@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QDate, Qt, QTimer
+from PySide6.QtCore import QDate, QSettings, Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -40,17 +40,24 @@ class TransactionDialog(QDialog):
         *,
         default_kind: str = "expense",
         refund_of: Transaction | None = None,
+        duplicate: Transaction | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.service = service
         self.transaction = transaction
+        self._duplicate = duplicate
+        self._settings = QSettings("FinBoard", "FinBoard")
         self._refund_target = refund_of
         self._rule = None
         self._rule_tags: list[str] = []
-        self._category_touched = bool(transaction)
+        self._category_touched = bool(transaction or duplicate)
         self._applying_rule = False
-        self.setWindowTitle(t("编辑记录") if transaction else t("记一笔"))
+        self.setWindowTitle(
+            t("编辑记录")
+            if transaction
+            else (t("复制记录") if duplicate else t("记一笔"))
+        )
         self.setModal(True)
         self.setMinimumWidth(570)
         self.setSizeGripEnabled(False)
@@ -65,10 +72,16 @@ class TransactionDialog(QDialog):
         layout.setSpacing(12)
 
         header, _ = dialog_header(
-            t("编辑记录") if transaction else t("记一笔"),
+            t("编辑记录")
+            if transaction
+            else (t("复制记录") if duplicate else t("记一笔")),
             t("修改后账户余额会同步更新")
             if transaction
-            else t("记录一笔收入、支出或账户间转账"),
+            else (
+                t("复制上一笔，确认日期和金额后保存")
+                if duplicate
+                else t("记录一笔收入、支出或账户间转账")
+            ),
             "edit" if transaction else "plus",
         )
         layout.addLayout(header)
@@ -219,7 +232,12 @@ class TransactionDialog(QDialog):
         self._load_targets()
         if transaction:
             self._fill(transaction)
+        elif duplicate:
+            self._fill(duplicate)
+            self.date_edit.setDate(QDate.currentDate())
+            self.refund_check.setChecked(False)
         else:
+            self._restore_defaults()
             currency = self._selected_account_currency()
             index = self.currency_combo.findData(currency)
             if index >= 0:
@@ -405,6 +423,18 @@ class TransactionDialog(QDialog):
         elif self.refund_check.isChecked():
             self.refund_label.show()
             self.refund_combo.show()
+
+    def _restore_defaults(self) -> None:
+        account_id = self._settings.value("last/account_id")
+        if account_id not in (None, ""):
+            index = self.account_combo.findData(int(account_id))
+            if index >= 0:
+                self.account_combo.setCurrentIndex(index)
+        category_id = self._settings.value("last/category_id")
+        if category_id not in (None, ""):
+            index = self.category_combo.findData(int(category_id))
+            if index >= 0:
+                self.category_combo.setCurrentIndex(index)
 
     def _fill(self, transaction: Transaction) -> None:
         self._category_touched = True
@@ -692,6 +722,9 @@ class TransactionDialog(QDialog):
             return
         if used_rule is not None:
             self.service.record_rule_hit(used_rule.id)
+        self._settings.setValue("last/account_id", account_id)
+        if category_id is not None:
+            self._settings.setValue("last/category_id", category_id)
         self.accept()
 
 

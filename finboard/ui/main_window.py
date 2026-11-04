@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
@@ -15,7 +15,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QStackedWidget,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -31,8 +33,11 @@ from .pages import (
     AccountsPage,
     BudgetsPage,
     DashboardPage,
+    DebtsPage,
     FixedAssetsPage,
     ForecastPage,
+    PlannedPage,
+    ReceivablesPage,
     RecurringPage,
     ReportsPage,
     SavingsPage,
@@ -55,9 +60,12 @@ NAV_ITEMS = [
     ("dashboard", "dashboard", "总览"),
     ("transactions", "list", "收支明细"),
     ("accounts", "wallet", "账户"),
+    ("debts", "credit-card", "负债"),
     ("fixed_assets", "home", "固定资产"),
     ("budgets", "target", "预算"),
     ("savings", "savings", "储蓄"),
+    ("planned", "calendar", "计划"),
+    ("receivables", "transfer", "往来款"),
     ("forecast", "trending-up", "预测"),
     ("recurring", "calendar", "定期"),
     ("reports", "chart", "报表"),
@@ -91,6 +99,10 @@ class MainWindow(QMainWindow):
         self.settings = settings or QSettings("FinBoard", "FinBoard")
         self.current_key = "dashboard"
         self._rate_thread: _RateFetchThread | None = None
+        self._quitting = False
+        self._tray: QSystemTrayIcon | None = None
+        self._tray_menu: QMenu | None = None
+        self._tray_hint_shown = False
         set_ui_language(language or str(self.settings.value("language", "zh")))
         apply_locale()
 
@@ -106,6 +118,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_shortcuts()
+        self._build_tray()
         self._restore_geometry()
         self._update_greeting()
         self._update_currency_chip()
@@ -141,9 +154,12 @@ class MainWindow(QMainWindow):
             "dashboard": DashboardPage(self.service, self),
             "transactions": TransactionsPage(self.service, self),
             "accounts": AccountsPage(self.service, self),
+            "debts": DebtsPage(self.service, self),
             "fixed_assets": FixedAssetsPage(self.service, self),
             "budgets": BudgetsPage(self.service, self),
             "savings": SavingsPage(self.service, self),
+            "planned": PlannedPage(self.service, self),
+            "receivables": ReceivablesPage(self.service, self),
             "forecast": ForecastPage(self.service, self),
             "recurring": RecurringPage(self.service, self),
             "reports": ReportsPage(self.service, self),
@@ -166,7 +182,7 @@ class MainWindow(QMainWindow):
         self.toast_timer.timeout.connect(self.toast.hide)
 
         self.navigate("dashboard")
-        QTimer.singleShot(800, self._remind_matured_deposits)
+        QTimer.singleShot(1200, self._check_reminders)
 
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
@@ -282,6 +298,7 @@ class MainWindow(QMainWindow):
         self._shortcuts = []
         bindings = [
             ("Ctrl+N", self.open_transaction),
+            ("Ctrl+Shift+N", self.copy_last_transaction),
             ("Ctrl+F", self._focus_search),
             ("Ctrl+Z", self.undo_last),
             ("Ctrl+,", lambda: self.navigate("settings")),
@@ -392,18 +409,142 @@ class MainWindow(QMainWindow):
         localize_widgets(dialog)
         dialog.exec()
 
+    def copy_last_transaction(self) -> None:
+        recent = self.service.repo.recent_transactions(1)
+        if not recent:
+            self.notify(t("还没有可复制的记录"))
+            return
+        dialog = TransactionDialog(self.service, duplicate=recent[0], parent=self)
+        localize_widgets(dialog)
+        dialog.exec()
+
+    def _build_tray(self) -> None:
+        if not self.settings.value("tray/enabled", True, type=bool):
+            return
+        if self._tray is not None or not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        tray = QSystemTrayIcon(app_icon(), self)
+        tray.setToolTip(t("FinBoard — 个人财务"))
+        menu = QMenu()
+        menu.addAction(t("打开 FinBoard"), self._show_from_tray)
+        menu.addAction(t("记一笔"), self._quick_add_from_tray)
+        menu.addAction(t("复制上一笔"), self._quick_copy_from_tray)
+        menu.addSeparator()
+        menu.addAction(t("退出"), self._quit_from_tray)
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._tray_activated)
+        tray.show()
+        self._tray = tray
+        self._tray_menu = menu
+
+    def _tray_activated(self, reason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._show_from_tray()
+
+    def _show_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quick_add_from_tray(self) -> None:
+        self._show_from_tray()
+        self.open_transaction()
+
+    def _quick_copy_from_tray(self) -> None:
+        self._show_from_tray()
+        self.copy_last_transaction()
+
+    def _quit_from_tray(self) -> None:
+        self._quitting = True
+        if self._tray is not None:
+            self._tray.hide()
+        QApplication.quit()
+
+    def set_tray_enabled(self, enabled: bool) -> None:
+        self.settings.setValue("tray/enabled", bool(enabled))
+        self.settings.sync()
+        if enabled:
+            self._build_tray()
+        elif self._tray is not None:
+            self._tray.hide()
+            self._tray.deleteLater()
+            self._tray = None
+            self._tray_menu = None
+
     def _remind_matured_deposits(self) -> None:
+        self._check_reminders()
+
+    def _check_reminders(self) -> None:
+        if not self.settings.value("reminders/enabled", True, type=bool):
+            return
+        messages: list[str] = []
         try:
             matured = self.service.matured_term_deposits()
+            if matured:
+                messages.append(
+                    t("有 {count} 笔定期存款已到期，请确认支取。", count=len(matured))
+                )
+            month = month_of(today())
+            lines = self.service.repo.budget_lines(month)
+            overall = next((line for line in lines if line.is_overall), None)
+            if overall is not None and overall.remaining < 0:
+                messages.append(
+                    t(
+                        "本月预算已超支 {amount}",
+                        amount=self.service.format(-overall.remaining),
+                    )
+                )
+            due = self.service.repo.due_recurring()
+            if due:
+                messages.append(
+                    t("有 {count} 笔定期交易待确认入账", count=len(due))
+                )
+            for debt in self.service.repo.debts():
+                if debt.is_credit:
+                    cycle = self.service.repo.debt_credit_cycle(debt.account_id)
+                    if cycle is not None and 0 <= cycle.days_until_due <= 3:
+                        messages.append(
+                            t(
+                                "信用卡 {name} 将在 {days} 天后到期",
+                                name=debt.account_name,
+                                days=cycle.days_until_due,
+                            )
+                        )
+                else:
+                    schedule = self.service.repo.debt_schedule(debt.account_id)
+                    if not schedule:
+                        continue
+                    try:
+                        days = (
+                            date.fromisoformat(schedule[0].date) - date.today()
+                        ).days
+                    except ValueError:
+                        continue
+                    if 0 <= days <= 3:
+                        messages.append(
+                            t(
+                                "贷款 {name} 将在 {days} 天后还款",
+                                name=debt.account_name,
+                                days=days,
+                            )
+                        )
         except Exception:
             return
-        if matured:
-            self.notify(
-                t(
-                    "有 {count} 笔定期存款已到期，请确认支取。",
-                    count=len(matured),
-                )
+        if not messages:
+            return
+        text = "\n".join(messages[:4])
+        if self._tray is not None and self._tray.isVisible():
+            self._tray.showMessage(
+                t("FinBoard 提醒"),
+                text,
+                QSystemTrayIcon.MessageIcon.Information,
+                9000,
             )
+        else:
+            self.notify(text)
 
     def undo_last(self) -> None:
         try:
@@ -567,6 +708,23 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self.settings.setValue("geometry", self.saveGeometry())
+        if (
+            not self._quitting
+            and self._tray is not None
+            and self._tray.isVisible()
+            and self.settings.value("tray/enabled", True, type=bool)
+        ):
+            event.ignore()
+            self.hide()
+            if not self._tray_hint_shown:
+                self._tray_hint_shown = True
+                self._tray.showMessage(
+                    t("FinBoard 仍在后台运行"),
+                    t("托盘图标可随时打开窗口或退出。"),
+                    QSystemTrayIcon.MessageIcon.Information,
+                    5000,
+                )
+            return
         if self._rate_thread is not None and self._rate_thread.isRunning():
             self._rate_thread.wait(10_000)
         super().closeEvent(event)

@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -367,6 +367,90 @@ CREATE INDEX IF NOT EXISTS idx_term_deposits_status
 """
 
 
+SCHEMA_V15 = """
+ALTER TABLE holdings ADD COLUMN asset_class TEXT NOT NULL DEFAULT '';
+ALTER TABLE holdings ADD COLUMN region TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS fixed_asset_valuations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id   INTEGER NOT NULL REFERENCES fixed_assets(id) ON DELETE CASCADE,
+    value      INTEGER NOT NULL CHECK (value >= 0),
+    valued_on  TEXT    NOT NULL,
+    note       TEXT    NOT NULL DEFAULT '',
+    created_at TEXT    NOT NULL,
+    UNIQUE (asset_id, valued_on)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fixed_asset_valuations_date
+    ON fixed_asset_valuations(valued_on, asset_id);
+
+INSERT OR IGNORE INTO fixed_asset_valuations
+    (asset_id, value, valued_on, note, created_at)
+SELECT id, current_value, valuation_date, '', created_at FROM fixed_assets;
+
+CREATE TABLE IF NOT EXISTS debts (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id     INTEGER NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE CASCADE,
+    kind           TEXT    NOT NULL CHECK (kind IN ('loan','credit')),
+    principal      INTEGER NOT NULL DEFAULT 0 CHECK (principal >= 0),
+    annual_rate_bp INTEGER NOT NULL DEFAULT 0 CHECK (annual_rate_bp >= 0),
+    term_months    INTEGER NOT NULL DEFAULT 0 CHECK (term_months >= 0),
+    start_date     TEXT,
+    payment_method TEXT    NOT NULL DEFAULT 'equal_payment'
+                           CHECK (payment_method IN ('equal_payment','equal_principal')),
+    billing_day    INTEGER CHECK (billing_day BETWEEN 1 AND 28),
+    due_day        INTEGER CHECK (due_day BETWEEN 1 AND 28),
+    credit_limit   INTEGER NOT NULL DEFAULT 0 CHECK (credit_limit >= 0),
+    min_payment_bp INTEGER NOT NULL DEFAULT 1000
+                           CHECK (min_payment_bp BETWEEN 0 AND 10000),
+    note           TEXT    NOT NULL DEFAULT '',
+    created_at     TEXT    NOT NULL,
+    updated_at     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS planned_transactions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    date           TEXT    NOT NULL,
+    kind           TEXT    NOT NULL CHECK (kind IN ('expense','income','transfer')),
+    amount         INTEGER NOT NULL CHECK (amount > 0),
+    currency       TEXT    NOT NULL DEFAULT 'CNY',
+    account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    to_account_id  INTEGER REFERENCES accounts(id) ON DELETE RESTRICT,
+    category_id    INTEGER REFERENCES categories(id) ON DELETE RESTRICT,
+    payee          TEXT    NOT NULL DEFAULT '',
+    note           TEXT    NOT NULL DEFAULT '',
+    status         TEXT    NOT NULL DEFAULT 'planned'
+                           CHECK (status IN ('planned','done','cancelled')),
+    transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+    created_at     TEXT    NOT NULL,
+    updated_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_planned_transactions_date
+    ON planned_transactions(status, date);
+
+CREATE TABLE IF NOT EXISTS receivables (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    direction    TEXT    NOT NULL CHECK (direction IN ('receivable','payable')),
+    counterparty TEXT    NOT NULL,
+    amount       INTEGER NOT NULL CHECK (amount > 0),
+    currency     TEXT    NOT NULL DEFAULT 'CNY',
+    date         TEXT    NOT NULL,
+    due_date     TEXT,
+    account_id   INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+    note         TEXT    NOT NULL DEFAULT '',
+    status       TEXT    NOT NULL DEFAULT 'open'
+                         CHECK (status IN ('open','settled')),
+    settled_at   TEXT,
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_receivables_status
+    ON receivables(status, due_date);
+"""
+
+
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
 
@@ -445,6 +529,9 @@ class Database:
         if version < 14:
             conn.executescript(SCHEMA_V14)
             version = 14
+        if version < 15:
+            conn.executescript(SCHEMA_V15)
+            version = 15
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

@@ -21,7 +21,7 @@ from ...core.dates import month_label, month_of, today
 from ...core.exporters import export_excel, report_filename
 from ...core.models import CategorySpend, PayeeSpend
 from ...i18n import category_display, t
-from ..charts import CategoryBars, DonutChart, TrendChart
+from ..charts import CategoryBars, DonutChart, SpendingCalendar, TrendChart
 from ..pdf_export import export_pdf, pdf_filename
 from ..rows import ElidedLabel
 from ..theme import colors
@@ -79,6 +79,9 @@ class ReportsPage(Page):
         self.month_combo.set_month(month_of(today()))
         self.month_combo.currentIndexChanged.connect(lambda _index: self.refresh())
         header.add_action(self.month_combo)
+        self.fixed_button = ThemedButton("固定支出体检", "secondary", "target")
+        self.fixed_button.clicked.connect(self._open_fixed_costs)
+        header.add_action(self.fixed_button)
         self.export_button = ThemedButton("导出报表", "secondary", "download")
         self.export_button.clicked.connect(self._export_menu)
         header.add_action(self.export_button)
@@ -158,6 +161,12 @@ class ReportsPage(Page):
         self.trend_card.body.addWidget(self.trend_chart)
         self.body.addWidget(self.trend_card)
 
+        self.calendar_card = Card(padding=20, spacing=10)
+        self.calendar_card.add_header("支出热力日历", "颜色越深，当天支出越多")
+        self.calendar_chart = SpendingCalendar()
+        self.calendar_card.body.addWidget(self.calendar_chart)
+        self.body.addWidget(self.calendar_card)
+
         bottom = QHBoxLayout()
         bottom.setSpacing(18)
         self.category_card = Card(padding=20, spacing=10)
@@ -174,6 +183,12 @@ class ReportsPage(Page):
         self.payee_card.body.addStretch(1)
         bottom.addWidget(self.payee_card, 2)
         self.body.addLayout(bottom)
+
+        self.tag_card = Card(padding=20, spacing=10)
+        self.tag_card.add_header("标签支出", "同一笔交易可以出现在多个标签下")
+        self.tag_bars = CategoryBars()
+        self.tag_card.body.addWidget(self.tag_bars)
+        self.body.addWidget(self.tag_card)
 
         self.note = QLabel("转账只在账户之间移动资金，不计入收入和支出。")
         self.note.setProperty("role", "faint")
@@ -227,7 +242,11 @@ class ReportsPage(Page):
         breakdown = self.service.repo.category_breakdown(month, "expense")
         self._refresh_expense_pie(breakdown, stats.expense, money)
         self.trend_chart.set_data(self.service.repo.trend(12, end_month=month))
+        self.calendar_chart.set_data(month, self.service.daily_expense(month))
         self.category_bars.set_data(breakdown[:8], total=stats.expense)
+        tags = self.service.tag_breakdown(month)
+        self.tag_card.setVisible(bool(tags))
+        self.tag_bars.set_data(tags[:8], total=sum(item.amount for item in tags))
         self._refresh_payees(month)
 
     def _refresh_worth(self, worth, money) -> None:
@@ -301,6 +320,12 @@ class ReportsPage(Page):
             self.payee_list.addWidget(RankRow(index, payee, self.service))
 
     # ------------------------------------------------------------------ export
+    def _open_fixed_costs(self) -> None:
+        from ..dialogs.fixed_cost import FixedCostDialog
+
+        dialog = FixedCostDialog(self.service, self.window)
+        dialog.exec()
+
     def _export_menu(self) -> None:
         menu = QMenu(self)
         excel = QAction(t("导出 Excel"), menu)

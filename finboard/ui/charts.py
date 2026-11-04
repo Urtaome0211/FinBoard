@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import calendar
 import math
 from dataclasses import dataclass
+from datetime import date
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from ..core.dates import short_month_label
-from ..core.models import AccountValuation, CategorySpend, MonthStats
+from ..core.models import AccountValuation, CategorySpend, MonthStats, NetWorthPoint
 from ..core.money import format_cents, format_percentage, percentage
 from ..i18n import category_display, compact_amount, t
 from .theme import colors, theme_store
@@ -308,6 +310,197 @@ class TrendChart(QWidget):
         )
 
 
+class NetWorthChart(QWidget):
+    """Net worth history as a single filled line."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._points: list[NetWorthPoint] = []
+        self._hover = -1
+        self.setMouseTracking(True)
+        self.setMinimumHeight(220)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        theme_store.changed.connect(self.update)
+
+    def set_data(self, points: list[NetWorthPoint]) -> None:
+        self._points = list(points)
+        self._hover = -1
+        self.update()
+
+    def _plot_rect(self) -> QRectF:
+        return QRectF(64, 20, max(10.0, self.width() - 82), max(10.0, self.height() - 52))
+
+    def _range(self) -> tuple[float, float]:
+        values = [point.net for point in self._points] or [0]
+        low = min(0.0, float(min(values)))
+        high = max(0.0, float(max(values)))
+        if low == high:
+            high = low + 100.0
+        padding = (high - low) * 0.08
+        return low - padding, high + padding
+
+    def _point(self, index: int) -> QPointF:
+        rect = self._plot_rect()
+        low, high = self._range()
+        count = max(1, len(self._points))
+        x = rect.left() + rect.width() * index / max(1, count - 1)
+        value = self._points[index].net
+        y = rect.bottom() - rect.height() * (value - low) / (high - low)
+        return QPointF(x, y)
+
+    def _y_for(self, value: float) -> float:
+        rect = self._plot_rect()
+        low, high = self._range()
+        return rect.bottom() - rect.height() * (value - low) / (high - low)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if not self._points:
+            return
+        rect = self._plot_rect()
+        if rect.left() <= event.position().x() <= rect.right():
+            ratio = (event.position().x() - rect.left()) / max(1.0, rect.width())
+            index = int(round(ratio * (len(self._points) - 1)))
+            index = max(0, min(len(self._points) - 1, index))
+            if index != self._hover:
+                self._hover = index
+                self.update()
+        elif self._hover != -1:
+            self._hover = -1
+            self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hover = -1
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        palette = colors()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if not self._points:
+            painter.setPen(QColor(palette.faint))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, t("暂无趋势数据"))
+            return
+        rect = self._plot_rect()
+        low, high = self._range()
+        label_font = QFont(self.font())
+        label_font.setPixelSize(11)
+        painter.setFont(label_font)
+        grid_pen = QPen(QColor(palette.chart_grid), 1)
+        for step in range(5):
+            value = low + (high - low) * step / 4
+            y = self._y_for(value)
+            painter.setPen(grid_pen)
+            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+            painter.setPen(QColor(palette.faint))
+            painter.drawText(
+                QRectF(0, y - 9, rect.left() - 10, 18),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                compact_amount(int(value)),
+            )
+        zero = self._y_for(0)
+        if rect.top() < zero < rect.bottom():
+            zero_pen = QPen(QColor(palette.border_strong), 1)
+            zero_pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(zero_pen)
+            painter.drawLine(QPointF(rect.left(), zero), QPointF(rect.right(), zero))
+
+        count = len(self._points)
+        every = 2 if count > 8 else 1
+        for index, point in enumerate(self._points):
+            if index % every != 0 and index != count - 1:
+                continue
+            x = self._point(index).x()
+            painter.setPen(QColor(palette.faint))
+            painter.drawText(
+                QRectF(x - 24, rect.bottom() + 10, 48, 18),
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                short_month_label(point.month),
+            )
+
+        path = QPainterPath()
+        area = QPainterPath()
+        for index in range(count):
+            point = self._point(index)
+            if index == 0:
+                path.moveTo(point)
+                area.moveTo(point)
+            else:
+                path.lineTo(point)
+                area.lineTo(point)
+        area.lineTo(QPointF(rect.right(), zero))
+        area.lineTo(QPointF(rect.left(), zero))
+        area.closeSubpath()
+        fill = QColor(palette.accent)
+        fill.setAlpha(18)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawPath(area)
+        pen = QPen(QColor(palette.accent), 2.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+        for index in range(count):
+            point = self._point(index)
+            painter.setPen(QPen(QColor(palette.accent), 2))
+            painter.setBrush(QColor(palette.surface))
+            painter.drawEllipse(point, 3.2, 3.2)
+
+        if self._hover >= 0:
+            index = self._hover
+            x = self._point(index).x()
+            guide = QPen(QColor(palette.border_strong), 1)
+            guide.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(guide)
+            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+            self._draw_tooltip(painter, index, rect)
+
+    def _draw_tooltip(self, painter: QPainter, index: int, rect: QRectF) -> None:
+        palette = colors()
+        item = self._points[index]
+        width, height = 184.0, 92.0
+        point = self._point(index)
+        left = point.x() + 12
+        if left + width > self.width() - 8:
+            left = point.x() - width - 12
+        left = max(8.0, left)
+        top = max(8.0, rect.top() - 4)
+        box = QRectF(left, top, width, height)
+        shadow = QColor(palette.text)
+        shadow.setAlpha(12)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(shadow)
+        painter.drawRoundedRect(box.adjusted(0, 2, 0, 2), 10, 10)
+        painter.setBrush(QColor(palette.surface))
+        painter.setPen(QPen(QColor(palette.border), 1))
+        painter.drawRoundedRect(box, 10, 10)
+        font = QFont(self.font())
+        font.setPixelSize(12)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        painter.setPen(QColor(palette.text))
+        painter.drawText(
+            box.adjusted(12, 8, -12, 0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            item.month,
+        )
+        font.setWeight(QFont.Weight.Normal)
+        painter.setFont(font)
+        lines = (
+            (t("资产"), item.assets, palette.income),
+            (t("负债"), item.liabilities, palette.expense),
+            (t("净资产"), item.net, palette.accent),
+        )
+        for offset, (label, value, color) in enumerate(lines):
+            painter.setPen(QColor(color))
+            painter.drawText(
+                box.adjusted(12, 31 + offset * 18, -12, 0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                f"{label}  {compact_amount(value)}",
+            )
+
+
 class ValuationChart(QWidget):
     """Single-series account value history for investment accounts."""
 
@@ -525,6 +718,108 @@ class CategoryBars(QWidget):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 format_percentage(item.amount, self._total),
             )
+
+
+class SpendingCalendar(QWidget):
+    """Month grid where each day is tinted by that day's spending."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._month = ""
+        self._totals: dict[str, int] = {}
+        self.setMinimumHeight(220)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        theme_store.changed.connect(self.update)
+
+    def set_data(self, month: str, totals: dict[str, int]) -> None:
+        self._month = month
+        self._totals = totals
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        palette = colors()
+        if not self._month:
+            return
+        try:
+            year, month = (int(part) for part in self._month.split("-"))
+        except ValueError:
+            return
+        first_weekday, days = calendar.monthrange(year, month)
+        maximum = max(self._totals.values(), default=0)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        left, top = 4.0, 4.0
+        header_height = 20.0
+        cell_width = (self.width() - left * 2) / 7
+        cell_height = (
+            self.height() - top * 2 - header_height
+        ) / 6
+        if cell_width <= 8 or cell_height <= 8:
+            return
+
+        header_font = QFont(self.font())
+        header_font.setPointSizeF(8.0)
+        painter.setFont(header_font)
+        painter.setPen(QColor(palette.muted))
+        for column, label in enumerate(
+            ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+        ):
+            painter.drawText(
+                QRectF(
+                    left + column * cell_width,
+                    top,
+                    cell_width,
+                    header_height - 2,
+                ),
+                Qt.AlignmentFlag.AlignCenter,
+                t(label),
+            )
+
+        for day in range(1, days + 1):
+            index = first_weekday + day - 1
+            column = index % 7
+            row = index // 7
+            rect = QRectF(
+                left + column * cell_width + 3,
+                top + header_height + row * cell_height + 3,
+                cell_width - 6,
+                cell_height - 6,
+            )
+            iso = f"{year:04d}-{month:02d}-{day:02d}"
+            amount = self._totals.get(iso, 0)
+            if amount and maximum:
+                ratio = min(1.0, amount / maximum)
+                fill = QColor(palette.primary)
+                fill.setAlpha(30 + int(ratio * 150))
+                painter.setBrush(fill)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(rect, 7, 7)
+            else:
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(palette.border), 1))
+                painter.drawRoundedRect(rect, 7, 7)
+
+            day_font = QFont(self.font())
+            day_font.setPointSizeF(8.5)
+            painter.setFont(day_font)
+            painter.setPen(QColor(palette.text))
+            painter.drawText(
+                rect.adjusted(7, 4, -4, -4),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                str(day),
+            )
+            if amount:
+                amount_font = QFont(self.font())
+                amount_font.setPointSizeF(8.0)
+                amount_font.setBold(True)
+                painter.setFont(amount_font)
+                painter.setPen(QColor(palette.text))
+                painter.drawText(
+                    rect.adjusted(3, 0, -3, -4),
+                    Qt.AlignmentFlag.AlignCenter,
+                    compact_amount(amount),
+                )
+        painter.end()
 
 
 def _short_money(cents: int) -> str:

@@ -17,9 +17,18 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 
 界面采用扁平化设计，提供浅色与深色两套主题；资产与负债的比例用自绘环形图展示，收支趋势、分类排行也全部由 `QPainter` 绘制，不依赖任何第三方图表库。
 
+### Fluent 重构版
+
+仓库还包含一个基于 **PySide6-Fluent-Widgets** 的完整重构版，位于 [`FluentRebuild/`](FluentRebuild/)：
+
+- 独立包名 `finboard_fluent`，独立可执行文件 `FinBoardFluent.exe`；
+- 与 5.0 共用数据目录、数据库、设置和备份，可直接读取现有账目；
+- 13 个页面、11 类对话框、托盘/提醒、中英文和亮暗主题全部保留；
+- 135 个测试通过，构建说明和已知限制见 [`FluentRebuild/README.md`](FluentRebuild/README.md)，技术复盘见 [`FluentRebuild/BLOG.md`](FluentRebuild/BLOG.md)。
+
 ### 功能
 
-- **总览**：净资产、本月收入/支出/结余、资产与负债百分比环图、近 6 个月趋势、最近记录、预算进度。
+- **总览**：净资产、本月收入/支出/结余、资产与负债百分比环图、近 6 个月趋势、近 12 个月净资产曲线、投资浮盈、最近记录、预算进度。
 - **收支明细**：按月份、类型、账户、分类、标签筛选，支持关键词搜索；每笔显示对应账户动账后的余额（转账显示转出账户余额）；双击编辑、右键删除、Delete 删除；支持拆分、标签、附件与 CSV 导出；多选后批量改分类/加移除标签；可用 Ctrl+Z 撤销上一步操作（新增、编辑、删除、标签/拆分修改与批量修改）。
 - **退款**：收入可勾选「这是一笔退款」并关联原支出；退款不计入收入，按净额冲减支出统计、分类排行与现金流预测；系统会校验原支出类型、退款上限和删除顺序。
 - **账户**：现金、储蓄卡、投资理财、信用卡、贷款五类账户；每个账户可设自己的币种；实时余额由期初余额和流水聚合得出；信用卡/贷款按欠款金额（正数）录入，自动计入负债；支持归档与恢复。
@@ -32,16 +41,23 @@ FinBoard（财观）是一个用 **Python + PySide6（Qt 6）+ SQLite** 编写�
 - **投资持仓与现金**：为投资账户登记股票、基金或 ETF 的数量、成本价和现价，自动计算成本、市值、浮动盈亏与收益率；持仓之外可单独填写现金，账户总值 = 现金 + 持仓市值，可一键按总值校准账户；已实现收益、累计分红计入累计收益。
 - **预算结转**：勾选「结转到下月」后，本月未用完的正预算会带入下月；超支不结转，明细页显示结转额与可用预算。
 - **储蓄**：定期存款记录本金、年利率、期限、到期日、活期利率和到期转入账户；存入时从账户转出并同步余额，到期或提前支取时按规则计息、本金转回指定账户、利息单独记收入；储蓄目标继续保留。
+- **负债管理**：贷款和信用卡账户可填写利率、期限、还款方式、账单日/还款日、最低还款比例；贷款显示等额本息/等额本金摊还表与剩余本金，信用卡显示账单周期、免息期与最低还款；支持雪崩/雪球清偿计划与额外月供模拟。
+- **净资产历史**：固定资产可记录多次估值（`fixed_asset_valuations`），总览用账户历史余额回算近 12 个月净资产曲线；投资账户单独显示成本、市值与浮盈。
+- **计划交易**：一次性首付、学费、年终奖等可先记为计划，确认后按普通交易入账，并纳入现金流预测；支持取消与删除。
+- **往来款**：借给朋友、公司垫付等记成应收/应付，结清只改状态，不产生收支，避免污染报表。
+- **提醒与托盘**：可选托盘常驻；预算超支、定期交易待确认、信用卡/贷款还款日临近、定期存款到期时提醒；关闭窗口可最小化到托盘。
 - **现金流预测**：按定期交易和最近 3 个月的非定期收支，预测未来 3/6/12 个月的收入、支出、净现金流和期末现金。
 - **汇率**：每日自动检查一次，也可在设置页手动刷新；数据来自 Frankfurter（欧洲央行参考汇率），缓存在本地，离线时继续使用最后一次汇率。
 - **预算**：按月设置总预算和分类预算，实时显示已用、剩余、使用率；超支时用红色提示；可开启跨月结转。
-- **报表**：投资组合汇总、资产/负债结构、本月支出构成、近 12 个月趋势、支出分类排行、消费对象 Top 5；可导出 Excel 或 PDF。
+- **报表**：投资组合汇总、资产/负债结构、本月支出构成、近 12 个月趋势、支出分类排行、消费对象 Top 5、标签支出、支出热力日历；可导出 Excel 或 PDF。
+- **固定支出体检**：从近 12 个月历史识别每月重复、金额稳定的支出（订阅、房租等），估算年度固定成本与收入占比，提示可优化空间。
+- **导入预设**：内置支付宝、微信和常见银行 CSV 表头的自动识别与映射；可选择「使用文件中的账户」或指定默认账户，自动跳过「不计收支」行。
 - **记账**：支持支出、收入、账户间转账；可填写日期、金额、账户、分类、对方、备注。
 - **分类管理**：自定义支出/收入分类名称与颜色；删除分类时，历史记录自动归入「其他」。
 - **自动分类规则**：按付款对象关键词自动填充分类与标签；可在设置页管理规则、从历史记录学习（同一付款对象至少出现两次且分类一致），并把规则标签回填到历史交易。
 - **数据**：CSV 导入/导出（支持自定义列映射、保存导入规则、按日期/类型/金额/账户/对方去重）、数据库备份（启动时完整性检查、每日自动轮转、可从备份恢复）、载入演示数据、清空全部数据。
 - **交易元数据**：一笔支出/收入可拆分到多个分类（合计必须等于交易金额），可加多个标签，可把回单/发票复制为附件；转账不可拆分。
-- **体验**：浅色/深色主题一键切换、中英文界面切换（默认中文）、全局搜索、快捷键、卡片式扁平布局。
+- **体验**：浅色/深色主题一键切换、中英文界面切换（默认中文）、全局搜索、快捷键、卡片式扁平布局；Ctrl+Shift+N 复制上一笔，新建交易默认沿用上次账户/分类；投资持仓可填资产类别/地区，查看配置环图与年化 XIRR。
 
 ### 界面
 
@@ -256,8 +272,8 @@ finboard/
 │   ├── models.py           # 交易表模型、持仓表模型与类型徽章代理
 │   ├── rows.py             # 交易/账户列表行
 │   ├── main_window.py      # 侧栏、顶栏、页面路由
-│   ├── dialogs/            # 记账、账户、市值、持仓、储蓄、分类、预算、定期、对账、CSV、元数据
-│   └── pages/              # 总览、明细、账户、固定资产、预算、储蓄、预测、定期、报表、设置
+│   ├── dialogs/            # 记账、账户、市值、持仓、储蓄、负债、计划、往来款、分类、预算、定期、对账、CSV、元数据
+│   └── pages/              # 总览、明细、账户、固定资产、负债、预算、储蓄、计划、往来款、预测、定期、报表、设置
 ├── resources/              # 图标、勾选/下拉 SVG
 └── __main__.py
 tests/test_core.py          # 金额/日期/仓储/CSV/服务层测试
@@ -275,6 +291,7 @@ tests/test_v40.py           # 持仓已实现收益/分红、批量编辑与撤�
 tests/test_v41.py           # 固定资产 CRUD、估值折算与净值
 tests/test_v42.py           # 退款、撤销、分类规则与备份恢复
 tests/test_v43.py           # 定期存款、利息、支取与系统账户
+tests/test_v50.py           # 负债、净资产历史、计划交易、往来款、报表与投资分析
 scripts/                    # 冒烟、截图、图标生成
 docs/                       # 截图与 logo
 run.py                      # 源码入口
@@ -296,6 +313,11 @@ FinBoard.spec               # PyInstaller 构建配置
 - **备份与恢复**：启动时先执行 `PRAGMA quick_check`，超过 20 小时未备份则用 SQLite 在线备份写入 `backups/`，默认保留 10 份；恢复前会先为当前数据库创建一份安全快照，并校验目标库的 schema 版本与完整性。
 - **定期存款**：每个币种一个 `is_system=1` 的虚拟投资账户，存款时从源账户转入该账户，到期或提前支取时再转回目标账户；定期利息按 `本金 × 年利率 × 月数 / 12`、提前支取按 `本金 × 活期利率 × 持有天数 / 365` 用整数分计算，利息记入「利息收入」分类，不改写本金交易。
 - **持仓与现金**：`holdings` 用百万分之一股存储数量，成本/市值/盈亏全部用整数分计算；投资账户没有市值快照时，余额 = 现金 + 持仓市值。现金通过 `accounts.adjustment` 校准，不写收支；「按市值校准」会把现金和持仓合计写成当天估值。
+- **负债与摊还**：`debts` 只保存贷款/信用卡参数，不落库还款计划；摊还表由期初本金、利率、期数和还款方式现算，信用卡周期按账单日/还款日计算。清偿计划按雪崩（利率高优先）或雪球（余额小优先）逐月模拟，额外月供可调。
+- **净资产历史**：`fixed_asset_valuations` 保存每次固定资产估值；`account_balance_at` 用账户期初、校准、流水和投资估值回放历史余额，再按月汇总资产减负债，避免只展示当期快照。
+- **计划与往来款**：计划交易确认时才调用普通记账逻辑并写入 `transaction_id`；应收/应付独立于 `transactions`，结清只更新状态，因此不会虚增收入或支出。
+- **投资分析**：持仓的 `asset_class`/`region` 用于配置环图；XIRR 用持仓创建日期、成本、当前市值、已实现收益和分红构造现金流，按 365 天折现估算年化收益，历史不足时返回空。
+- **固定支出与热力日历**：固定支出按付款对象分组，要求至少 3 个月且金额波动不超过 20%；热力日历按日汇总支出，颜色深浅表示相对金额。
 - **预算结转**：只有上个月开启 rollover 且剩余为正时才带入下月，逐月递归；超支归零，避免负预算继续扩张。
 - **现金流预测**：期初现金只含现金/储蓄卡账户；非定期收支取近 3 个完整月均值，定期规则按 `next_date` 逐次投影；转账不计入。
 - **自绘图表**：环图、折线图、分类条全部在 `paintEvent` 中绘制，颜色取当前 Palette，主题切换即时重绘。
@@ -305,7 +327,7 @@ FinBoard.spec               # PyInstaller 构建配置
 ### 测试与构建
 
 ```bash
-# 单元测试（123 个）
+# 单元测试（132 个）
 python -m unittest discover -s tests
 
 # 核心冒烟（临时数据库、演示数据、CSV 往返）
@@ -336,6 +358,13 @@ python -m PyInstaller FinBoard.spec --noconfirm --clean
 - 自动备份默认开启，最多保留 10 份数据库快照，启动时超过 20 小时未备份才会创建；备份只含数据库，附件仍需另行备份 `attachments/`。
 - 撤销日志最多保留最近 100 步，覆盖新增、编辑、删除、标签/拆分修改和批量修改；重启后仍可撤销，但清空数据库会一并清除。
 - 定期存款每个币种共用一个自动创建的「定期存款」系统账户，不支持部分支取或自动续存；提前支取使用建单时填写的活期利率，系统账户不能手动编辑、归档或删除。
+- 负债还款计划不落库，按当前参数现算；提前还款、利率调整和逾期罚息需重新编辑参数模拟。信用卡最低还款比例只用于清偿计划，不会自动生成还款交易。
+- 计划交易和往来款都不会自动入账；计划交易需手动确认，往来款结清只改状态，不移动账户余额。
+- 投资 XIRR 以持仓创建日期作为买入日、当前市值加已实现收益/分红作为终点，未记录逐笔买卖流水；历史不足（例如当天新建持仓）显示「—」。行情价格仍需手动维护，没有自动行情源。
+- 托盘和系统通知依赖 Windows 托盘可用性；无托盘环境下提醒会退回应用内 toast。关闭到托盘后程序仍在后台运行，需从托盘菜单退出。
+- 固定支出识别基于付款对象和金额稳定性，改名、金额波动超过 20% 或不足 3 个月的历史不会命中。
+- 快速记账目前支持复制上一笔和记住上次账户/分类，尚未提供自定义模板与全局迷你输入窗。
+- 报表仍以自然月为切换单位，暂未提供任意起止日期、同比/环比切换或年度报告导出；标签分析和支出热力日历已可用。
 - 单用户、单机；没有登录、加密或云同步。
 - 预算按自然月设置；只有勾选「结转到下月」的预算才会把正剩余带入下月，超支不结转。
 - 不直接连接银行/支付宝/微信账单，需通过 CSV 导入；自定义 CSV 规则只在导入时使用，不改变原始文件。
@@ -360,7 +389,7 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 
 ### Features
 
-- **Dashboard**: net worth, monthly income/expense/balance, asset-vs-liability donut, 6-month trend, recent transactions and budget progress.
+- **Dashboard**: net worth, monthly income/expense/balance, asset-vs-liability donut, 6-month trend, 12-month net-worth history, unrealized investment gains, recent transactions and budget progress.
 - **Transactions**: filter by month, kind, account, category and tag; search by payee/note; each row shows the account balance after that posting (transfers show the source account); edit, delete, split across categories, tag, attach receipts and export to CSV; select multiple rows to change category or add/remove tags in bulk; press Ctrl+Z to undo the last action (new entry, edit, delete, tag/split change or bulk edit).
 - **Refunds**: tick “This is a refund” on an income entry and link it to the original expense. Refunds do not count as income; they reduce expense totals, category rankings and cash-flow forecasts on a net basis. The original kind, refund cap and deletion order are validated.
 - **Accounts**: cash, debit card, investment, credit card and loan accounts, each with its own currency. Balances are aggregated from the opening balance and transactions in real time. Archive and restore are supported.
@@ -373,10 +402,17 @@ The interface is flat and calm, with light and dark themes. The asset/liability 
 - **Holdings & cash**: record quantity, cost price and current price for stocks, funds or ETFs; FinBoard calculates cost basis, market value, unrealized P/L and return. Cash not invested in holdings can be entered separately, and the account total is cash plus holdings market value. A button revalues the account with that total. Realized gains and dividends are included in the total return.
 - **Budget rollover**: with “Roll over to next month” enabled, unused positive budget carries into the next month; overspending does not.
 - **Savings**: fixed-term deposits track principal, annual rate, term, maturity date, demand rate and a maturity account. A deposit moves money out of the source account; at maturity or early withdrawal, interest is calculated and principal returns to the chosen account, with interest recorded as income. Savings goals remain available.
+- **Debt management**: loans and credit cards can store rate, term, repayment method, billing/due day and minimum-payment ratio. Loans show equal-payment/equal-principal schedules and remaining principal; cards show the billing cycle, grace period and minimum payment. Avalanche/snowball payoff plans support extra monthly payments.
+- **Net-worth history**: fixed assets keep a valuation history; the dashboard replays account balances to draw a 12-month net-worth curve, while investment accounts show cost, market value and unrealized gain separately.
+- **Planned transactions**: one-off down payments, tuition or bonuses can be planned first, then confirmed into a normal transaction and included in the cash-flow forecast.
+- **Receivables & payables**: money lent to friends or advanced for work is tracked separately; settling only changes status and never creates income/expense.
+- **Tray & reminders**: optional tray residency with reminders for over-budget months, due recurring rules, upcoming card/loan payments and maturing deposits. Closing the window can minimise to the tray.
 - **Cash-flow forecast**: project income, expenses, net cash flow and ending cash for the next 3/6/12 months from recurring rules and the last 3 months of non-recurring activity.
 - **Rates**: one automatic check per day plus a manual refresh in Settings. Data comes from Frankfurter (ECB reference rates) and is cached locally, so offline use keeps the last known rates.
 - **Budgets**: per-month overall and per-category limits, with spent/remaining/usage, over-budget warnings and optional rollover (only positive unused amounts carry).
-- **Reports**: asset/liability structure, monthly expense composition, 12-month trend, portfolio summary, category ranking and top payees; export to Excel or PDF.
+- **Reports**: asset/liability structure, monthly expense composition, 12-month trend, portfolio summary, category ranking, tag breakdown, spending heatmap and top payees; export to Excel or PDF.
+- **Fixed-expense checkup**: detects stable monthly payments (subscriptions, rent and similar) from up to 12 months of history, estimates annual fixed cost and its share of income.
+- **Import presets**: built-in Alipay, WeChat and common bank CSV header detection/mapping; use the account named in the file or a default account, and skip non-cash-flow rows automatically.
 - **Bookkeeping**: expenses, income and account-to-account transfers with date, amount, account, category, payee and note.
 - **Categories**: custom names and colors; deleting a category moves its history to “Other”.
 - **Automatic category rules**: fill category and tags from a payee keyword. Manage rules in Settings, learn them from history (same payee at least twice with one category), and backfill rule tags into matching transactions.
@@ -518,6 +554,10 @@ Shortcuts:
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+N` | New transaction |
+| `Ctrl+Shift+N` | Copy the last transaction |
+| `Ctrl+Z` | Undo the last change |
+| `Ctrl+Shift+N` | Copy the last transaction |
+| `Ctrl+Z` | Undo the last change |
 | `Ctrl+F` | Global search |
 | `Ctrl+,` | Settings |
 | `Ctrl+1` … `Ctrl+9` | Dashboard / Transactions / Accounts / Fixed assets / Budgets / Savings / Forecast / Recurring / Reports |
@@ -570,6 +610,12 @@ Default location on Windows:
 - **Refund netting**: a refund is still an `income` row, but carries `refund_of_id` pointing to the original expense. Monthly stats, trends, category reports and forecasts subtract refunds from expenses instead of counting them as income, so neither income nor expense is inflated.
 - **Automatic rules**: `category_rules` stores a keyword with a unique `lower(pattern) + kind` constraint. Matching is case-insensitive containment with the longest keyword winning; creating a transaction only prefills and hints, hit counts and tag backfills are explicit actions.
 - **Backup & restore**: startup runs `PRAGMA quick_check` and creates an online SQLite backup in `backups/` when the newest snapshot is over 20 hours old, keeping 10 by default. Restoring first snapshots the current database and validates the target schema version and integrity.
+- **Debt schedules** are computed from the current parameters and are not stored; early repayment, rate changes and penalties need a parameter edit to simulate. Minimum card payments are for the payoff planner and do not create payments automatically.
+- **Planned transactions and receivables** never post automatically; confirm a plan manually, and settling a receivable only changes its status.
+- **Investment XIRR** uses the holding creation date as the buy date and current value plus realized gains/dividends as the endpoint; it does not track individual trades. Prices remain manual — no automatic quote feed.
+- **Tray notifications** require a Windows tray; without one, reminders fall back to in-app toasts. Closing to the tray keeps the app running; quit from the tray menu.
+- **Fixed-expense detection** needs at least three months of consistent payee/amount history and ignores changes over 20%.
+- **Quick entry** currently supports copying the last transaction and remembering the last account/category; custom templates and a global mini window are not implemented yet.
 - **Custom charts**: donut, trend and category bars are painted in `paintEvent` with palette colors and repaint on theme changes.
 - **Theme system**: a single `Palette` dataclass drives QPalette, QSS and charts; the choice is stored in `QSettings`.
 - **Local-first**: no login, sync or telemetry; only one daily public rate request, and failures never block offline use.
@@ -577,7 +623,7 @@ Default location on Windows:
 ### Testing & build
 
 ```bash
-# 123 unit tests
+# 132 unit tests
 python -m unittest discover -s tests
 
 # Core smoke test (temporary DB, demo data, CSV round-trip)

@@ -36,6 +36,42 @@ FIELD_LABELS = {
     "note": "备注",
 }
 
+IMPORT_PRESETS = {
+    "alipay": {
+        "label": "支付宝账单",
+        "fields": {
+            "date": ("交易时间", "交易创建时间", "时间"),
+            "kind": ("收/支", "收／支"),
+            "amount": ("金额", "金额(元)", "金额（元）"),
+            "payee": ("交易对方", "对方"),
+            "note": ("商品说明", "商品名称", "备注"),
+            "account": ("收/付款方式", "支付方式"),
+        },
+    },
+    "wechat": {
+        "label": "微信支付账单",
+        "fields": {
+            "date": ("交易时间", "时间"),
+            "kind": ("收/支", "收／支"),
+            "amount": ("金额(元)", "金额（元）", "金额"),
+            "payee": ("交易对方", "对方"),
+            "note": ("商品", "商品说明", "备注"),
+            "account": ("支付方式",),
+        },
+    },
+    "bank": {
+        "label": "银行流水",
+        "fields": {
+            "date": ("交易日期", "日期", "时间"),
+            "kind": ("收支类型", "收/支", "类型"),
+            "amount": ("交易金额", "金额", "金额(元)"),
+            "payee": ("对方户名", "对方名称", "对方"),
+            "note": ("摘要", "备注", "说明"),
+            "account": ("账户", "付款账户", "交易账户"),
+        },
+    },
+}
+
 
 class CsvImportDialog(QDialog):
     def __init__(self, service, parent: QWidget | None = None) -> None:
@@ -64,6 +100,25 @@ class CsvImportDialog(QDialog):
         file_row.addWidget(self.file_label, 1)
         file_row.addWidget(choose)
         layout.addLayout(file_row)
+
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel(t("导入预设")))
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem(t("自动识别"), None)
+        for key, preset in IMPORT_PRESETS.items():
+            self.preset_combo.addItem(t(preset["label"]), key)
+        self.preset_combo.currentIndexChanged.connect(self._preset_changed)
+        preset_row.addWidget(self.preset_combo)
+        preset_row.addSpacing(12)
+        preset_row.addWidget(QLabel(t("默认账户")))
+        self.default_account_combo = QComboBox()
+        self.default_account_combo.addItem(t("使用文件中的账户"), None)
+        for account in self.service.repo.accounts():
+            self.default_account_combo.addItem(
+                f"{account.name} · {account.currency}", account.id
+            )
+        preset_row.addWidget(self.default_account_combo, 1)
+        layout.addLayout(preset_row)
 
         rule_row = QHBoxLayout()
         self.rule_combo = QComboBox()
@@ -231,10 +286,78 @@ class CsvImportDialog(QDialog):
             combo.setCurrentIndex(0)
             combo.blockSignals(False)
         auto = self._auto_mapping(headers)
-        for field, source in auto.items():
-            index = self.mapping_combos[field].findData(source)
-            if index >= 0:
-                self.mapping_combos[field].setCurrentIndex(index)
+        key = self._detect_preset(headers)
+        index = self.preset_combo.findData(key)
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentIndex(max(0, index))
+        self.preset_combo.blockSignals(False)
+        if key:
+            mapping = self._preset_mapping(key)
+            for field, source in auto.items():
+                mapping.setdefault(field, source)
+            self._set_rule(mapping)
+        else:
+            for field, source in auto.items():
+                index = self.mapping_combos[field].findData(source)
+                if index >= 0:
+                    self.mapping_combos[field].setCurrentIndex(index)
+
+    def _preset_changed(self) -> None:
+        key = self.preset_combo.currentData()
+        if key and self.headers:
+            self._set_rule(self._preset_mapping(key))
+
+    def _preset_mapping(self, key: str) -> dict[str, str]:
+        preset = IMPORT_PRESETS.get(key)
+        if not preset:
+            return {}
+        mapping: dict[str, str] = {}
+        for field, candidates in preset["fields"].items():
+            for candidate in candidates:
+                match = next(
+                    (
+                        header
+                        for header in self.headers
+                        if header.strip() == candidate
+                    ),
+                    None,
+                )
+                if match:
+                    mapping[field] = match
+                    break
+            if field in mapping:
+                continue
+            for candidate in candidates:
+                match = next(
+                    (
+                        header
+                        for header in self.headers
+                        if candidate in header
+                    ),
+                    None,
+                )
+                if match:
+                    mapping[field] = match
+                    break
+        return mapping
+
+    @staticmethod
+    def _detect_preset(headers: list[str]) -> str | None:
+        best_key = None
+        best_score = 0
+        for key, preset in IMPORT_PRESETS.items():
+            score = 0
+            for candidates in preset["fields"].values():
+                if any(
+                    header.strip() == candidate or candidate in header
+                    for header in headers
+                    for candidate in candidates
+                ):
+                    score += 1
+            if score > best_score:
+                best_key = key
+                best_score = score
+        return best_key if best_score >= 3 else None
 
     @staticmethod
     def _auto_mapping(headers: list[str]) -> dict[str, str]:
@@ -248,9 +371,14 @@ class CsvImportDialog(QDialog):
             show_error(self.error, t("请先选择 CSV 文件"))
             return
         mapping = self._selected_mapping()
+        account_id = self.default_account_combo.currentData()
         missing = [
-            field for field in ("date", "kind", "amount", "account") if field not in mapping
+            field
+            for field in ("date", "kind", "amount")
+            if field not in mapping
         ]
+        if account_id is None and "account" not in mapping:
+            missing.append("account")
         if missing:
             show_error(self.error, t("请映射日期、类型、金额和账户"))
             return
@@ -267,6 +395,7 @@ class CsvImportDialog(QDialog):
                 self.path,
                 rule=rule,
                 dedup=self.dedup_check.isChecked(),
+                default_account_id=self.default_account_combo.currentData(),
             )
         except (OSError, ValueError) as exc:
             show_error(self.error, str(exc))

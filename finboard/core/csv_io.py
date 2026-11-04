@@ -27,16 +27,39 @@ CSV_HEADERS = [
 ]
 
 _HEADER_ALIASES = {
-    "date": {"日期", "date", "时间", "交易日期"},
-    "kind": {"类型", "type", "收支类型", "收支"},
-    "amount": {"金额", "amount", "金额(元)", "金额（元）", "金额(分)"},
+    "date": {"日期", "date", "时间", "交易日期", "交易时间", "交易创建时间"},
+    "kind": {"类型", "type", "收支类型", "收支", "收/支", "收／支"},
+    "amount": {
+        "金额",
+        "amount",
+        "金额(元)",
+        "金额（元）",
+        "金额(分)",
+        "交易金额",
+    },
     "currency": {"币种", "currency", "货币"},
-    "category": {"分类", "category", "类别"},
-    "account": {"账户", "account", "支出账户", "付款账户"},
+    "category": {"分类", "category", "类别", "交易分类"},
+    "account": {
+        "账户",
+        "account",
+        "支出账户",
+        "付款账户",
+        "收/付款方式",
+        "收／付款方式",
+        "支付方式",
+    },
     "to_account": {"转入账户", "to_account", "目标账户", "对方账户", "收款账户"},
     "to_amount": {"到账金额", "to_amount", "转入金额"},
-    "payee": {"对方", "商户", "payee", "merchant", "交易对方"},
-    "note": {"备注", "note", "说明", "memo"},
+    "payee": {
+        "对方",
+        "商户",
+        "payee",
+        "merchant",
+        "交易对方",
+        "对方户名",
+        "对方名称",
+    },
+    "note": {"备注", "note", "说明", "memo", "商品说明", "商品名称", "摘要"},
 }
 
 _KIND_ALIASES = {
@@ -197,6 +220,7 @@ def import_csv(
     *,
     rule: CsvRule | None = None,
     dedup: bool = True,
+    default_account_id: int | None = None,
 ) -> ImportResult:
     """Validate every row, then import the good ones in a single transaction."""
     text = _decode(Path(path).read_bytes())
@@ -209,7 +233,10 @@ def import_csv(
         }
     else:
         mapping = _implicit_mapping(headers)
-    missing = [field for field in ("date", "kind", "amount", "account") if field not in mapping]
+    required = ["date", "kind", "amount"]
+    if default_account_id is None:
+        required.append("account")
+    missing = [field for field in required if field not in mapping]
     if missing:
         raise ValueError(
             "列映射缺少必需字段：日期、类型、金额、账户；请先设置 CSV 规则"
@@ -227,6 +254,18 @@ def import_csv(
         (category.name.strip().casefold(), category.kind): category
         for category in repo.categories()
     }
+    default_account = None
+    if default_account_id is not None:
+        default_account = next(
+            (
+                account
+                for account in repo.accounts(include_archived=True)
+                if account.id == int(default_account_id)
+            ),
+            None,
+        )
+        if default_account is None:
+            raise ValueError("导入账户不存在")
 
     result = ImportResult()
     prepared: list[dict] = []
@@ -236,9 +275,15 @@ def import_csv(
             raw_date = value(row, "date")
             if not raw_date:
                 raise ValueError("缺少日期")
-            date_value = normalize_day(raw_date)
+            date_text = str(raw_date).strip().replace("T", " ")
+            if " " in date_text:
+                date_text = date_text.split(" ", 1)[0]
+            date_value = normalize_day(date_text)
 
             kind_name = value(row, "kind")
+            if kind_name in ("不计收支", "不计入收支"):
+                result.skipped += 1
+                continue
             kind = _KIND_ALIASES.get(kind_name.casefold()) or _KIND_ALIASES.get(kind_name)
             if not kind:
                 raise ValueError(f"无法识别的类型“{kind_name}”")
@@ -251,12 +296,16 @@ def import_csv(
             if currency not in CURRENCIES:
                 raise ValueError(f"不支持的币种“{currency}”")
 
-            account_name = value(row, "account")
-            account = accounts.get(account_name.casefold())
-            if account is None:
-                raise ValueError(f"账户“{account_name}”不存在")
+            if default_account is not None:
+                account = default_account
+                account_name = account.name
+            else:
+                account_name = value(row, "account")
+                account = accounts.get(account_name.casefold())
+                if account is None:
+                    raise ValueError(f"账户“{account_name}”不存在")
             if account.archived:
-                raise ValueError(f"账户“{account_name}”已归档")
+                raise ValueError(f"账户“{account.name}”已归档")
             try:
                 account_amount = repo._converted(
                     amount, currency, account.currency, date_value
@@ -291,8 +340,18 @@ def import_csv(
             else:
                 category_name = value(row, "category")
                 category = categories.get((category_name.casefold(), kind))
+                if category is None and category_name:
+                    for (name, category_kind), candidate in categories.items():
+                        if category_kind == kind and (
+                            name in category_name.casefold()
+                            or category_name.casefold() in name
+                        ):
+                            category = candidate
+                            break
                 if category is None:
-                    raise ValueError(f"分类“{category_name}”不存在于{KIND_LABELS[kind]}分类")
+                    category = categories.get(("其他".casefold(), kind))
+                if category is None:
+                    raise ValueError("请先创建支出或收入分类")
                 category_id = category.id
 
             payee = value(row, "payee")[:60]

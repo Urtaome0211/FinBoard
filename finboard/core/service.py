@@ -16,6 +16,7 @@ from .backup import (
     restore_backup as _restore_backup,
 )
 from .dates import today_iso
+from .insights import FixedCost, detect_fixed_costs
 from .models import (
     AccountValuation,
     Attachment,
@@ -167,6 +168,63 @@ class FinanceService(QObject):
         if message:
             self.changed.emit()
         return message
+
+    # --------------------------------------------------------- core planning
+    def save_debt(
+        self, account_id: int, **fields
+    ) -> int:
+        account_id = self.repo.save_debt(account_id, **fields)
+        self.changed.emit()
+        return account_id
+
+    def delete_debt(self, account_id: int) -> None:
+        self.repo.delete_debt(account_id)
+        self.changed.emit()
+
+    def add_planned_transaction(self, **fields) -> int:
+        planned_id = self.repo.add_planned_transaction(**fields)
+        self.changed.emit()
+        return planned_id
+
+    def update_planned_transaction(self, planned_id: int, **fields) -> None:
+        self.repo.update_planned_transaction(planned_id, **fields)
+        self.changed.emit()
+
+    def confirm_planned_transaction(self, planned_id: int) -> int:
+        transaction_id = self.repo.confirm_planned_transaction(planned_id)
+        self.changed.emit()
+        return transaction_id
+
+    def cancel_planned_transaction(self, planned_id: int) -> None:
+        self.repo.cancel_planned_transaction(planned_id)
+        self.changed.emit()
+
+    def delete_planned_transaction(self, planned_id: int) -> None:
+        self.repo.delete_planned_transaction(planned_id)
+        self.changed.emit()
+
+    def add_receivable(self, **fields) -> int:
+        receivable_id = self.repo.add_receivable(**fields)
+        self.changed.emit()
+        return receivable_id
+
+    def settle_receivable(self, receivable_id: int) -> None:
+        self.repo.settle_receivable(receivable_id)
+        self.changed.emit()
+
+    def reopen_receivable(self, receivable_id: int) -> None:
+        self.repo.reopen_receivable(receivable_id)
+        self.changed.emit()
+
+    def delete_receivable(self, receivable_id: int) -> None:
+        self.repo.delete_receivable(receivable_id)
+        self.changed.emit()
+
+    def record_fixed_asset_valuation(
+        self, asset_id: int, value: int, valued_on: str, note: str = ""
+    ) -> None:
+        self.repo.record_fixed_asset_valuation(asset_id, value, valued_on, note)
+        self.changed.emit()
 
     # ---------------------------------------------------------- category rules
     def category_rules(self) -> list[CategoryRule]:
@@ -434,6 +492,15 @@ class FinanceService(QObject):
     def holdings_summary(self, account_id: int | None = None) -> HoldingsSummary:
         return self.repo.holdings_summary(account_id)
 
+    def fixed_costs(self, months: int = 12) -> list[FixedCost]:
+        return detect_fixed_costs(self.repo.expense_history(months))
+
+    def tag_breakdown(self, month: str | None = None, kind: str = "expense"):
+        return self.repo.tag_breakdown(month, kind)
+
+    def daily_expense(self, month: str):
+        return self.repo.daily_expense(month)
+
     def add_holding(self, account_id: int, name: str, **fields) -> int:
         holding_id = self.repo.add_holding(account_id, name, **fields)
         self.changed.emit()
@@ -442,6 +509,9 @@ class FinanceService(QObject):
     def update_holding(self, holding_id: int, **fields) -> None:
         self.repo.update_holding(holding_id, **fields)
         self.changed.emit()
+
+    def portfolio_xirr(self, account_id: int | None = None) -> float | None:
+        return self.repo.portfolio_xirr(account_id)
 
     def delete_holding(self, holding_id: int) -> None:
         self.repo.delete_holding(holding_id)
@@ -525,8 +595,15 @@ class FinanceService(QObject):
         *,
         rule: CsvRule | None = None,
         dedup: bool = True,
+        default_account_id: int | None = None,
     ) -> ImportResult:
-        result = csv_io.import_csv(self.repo, path, rule=rule, dedup=dedup)
+        result = csv_io.import_csv(
+            self.repo,
+            path,
+            rule=rule,
+            dedup=dedup,
+            default_account_id=default_account_id,
+        )
         if result.imported:
             self.changed.emit()
         return result

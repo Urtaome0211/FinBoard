@@ -11,7 +11,7 @@ from ...core.dates import month_label, month_of, today
 from ...i18n import category_display, t, today_label
 from ...core.models import BudgetLine
 from ...core.money import percentage
-from ..charts import DonutChart, TrendChart
+from ..charts import DonutChart, NetWorthChart, TrendChart
 from ..rows import TransactionRow
 from ..theme import colors, tone_for_ratio
 from ..widgets import (
@@ -62,9 +62,10 @@ class DashboardPage(Page):
         middle.setSpacing(18)
         self.worth_card = Card(padding=20, spacing=10)
         self.worth_card.setFixedWidth(392)
+        self.worth_card.setMinimumHeight(388)
         self.worth_card.add_header("资产与负债", "存款、固定资产与负债占总额的百分比")
         self.donut = DonutChart()
-        self.donut.setFixedSize(196, 196)
+        self.donut.setFixedSize(172, 172)
         self.worth_card.body.addWidget(self.donut, 0, Qt.AlignmentFlag.AlignHCenter)
         self.asset_legend = LegendRow(colors().income, "存款 / 资产")
         self.fixed_legend = LegendRow(colors().accent, "固定资产")
@@ -72,6 +73,11 @@ class DashboardPage(Page):
         self.worth_card.body.addWidget(self.asset_legend)
         self.worth_card.body.addWidget(self.fixed_legend)
         self.worth_card.body.addWidget(self.liability_legend)
+        self.gain_label = QLabel()
+        self.gain_label.setProperty("role", "faint")
+        self.gain_label.setWordWrap(True)
+        self.gain_label.hide()
+        self.worth_card.body.addWidget(self.gain_label)
         self.worth_card.body.addStretch(1)
         middle.addWidget(self.worth_card)
 
@@ -93,6 +99,14 @@ class DashboardPage(Page):
         self.trend_card.body.addWidget(self.trend_chart, 1)
         middle.addWidget(self.trend_card, 1)
         self.body.addLayout(middle)
+
+        self.networth_card = Card(padding=20, spacing=8)
+        self.networth_card.add_header(
+            "净资产趋势", "资产减负债，最近 12 个月；悬停查看每月构成"
+        )
+        self.networth_chart = NetWorthChart()
+        self.networth_card.body.addWidget(self.networth_chart, 1)
+        self.body.addWidget(self.networth_card)
 
         bottom = QHBoxLayout()
         bottom.setSpacing(18)
@@ -177,7 +191,21 @@ class DashboardPage(Page):
         self.liability_legend.set_data(
             money(worth.liabilities), f"{percentage(worth.liabilities, total):.1f}%"
         )
+        holdings = self.service.repo.holdings_summary()
+        if holdings.cost:
+            self.gain_label.setText(
+                t(
+                    "持仓成本 {cost} · 市值 {market} · 浮盈 {gain}",
+                    cost=money(holdings.cost),
+                    market=money(holdings.market),
+                    gain=money(holdings.market - holdings.cost, plus=True),
+                )
+            )
+            self.gain_label.show()
+        else:
+            self.gain_label.hide()
         self.trend_chart.set_data(self.service.repo.trend(6))
+        self.networth_chart.set_data(self.service.repo.net_worth_history(12))
         self._refresh_recent()
         self._refresh_budget()
 

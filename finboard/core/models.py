@@ -120,6 +120,76 @@ class AccountValuation:
 
 
 @dataclass(frozen=True)
+class Debt:
+    """A loan or credit-card profile attached to a liability account."""
+
+    id: int
+    account_id: int
+    kind: str
+    principal: int = 0
+    annual_rate_bp: int = 0
+    term_months: int = 0
+    start_date: str | None = None
+    payment_method: str = "equal_payment"
+    billing_day: int | None = None
+    due_day: int | None = None
+    credit_limit: int = 0
+    min_payment_bp: int = 1000
+    note: str = ""
+    created_at: str = ""
+    account_name: str = ""
+    account_balance: int = 0
+    currency: str = "CNY"
+
+    @property
+    def is_loan(self) -> bool:
+        return self.kind == "loan"
+
+    @property
+    def is_credit(self) -> bool:
+        return self.kind == "credit"
+
+    @property
+    def outstanding(self) -> int:
+        return abs(int(self.account_balance))
+
+    @property
+    def rate_text(self) -> str:
+        return f"{self.annual_rate_bp / 100:.2f}%"
+
+    @property
+    def min_payment(self) -> int:
+        if self.outstanding <= 0:
+            return 0
+        return min(
+            self.outstanding,
+            (self.outstanding * self.min_payment_bp + 9999) // 10000,
+        )
+
+    @property
+    def utilization(self) -> float:
+        if not self.is_credit or self.credit_limit <= 0:
+            return 0.0
+        return round(self.outstanding / self.credit_limit * 100, 1)
+
+    @property
+    def paid_progress(self) -> float:
+        if self.principal <= 0:
+            return 0.0
+        return round(min(100.0, (1 - self.outstanding / self.principal) * 100), 1)
+
+
+@dataclass(frozen=True)
+class FixedAssetValuation:
+    id: int
+    asset_id: int
+    value: int
+    valued_on: str
+    note: str = ""
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
 class Holding:
     id: int
     account_id: int
@@ -134,6 +204,8 @@ class Holding:
     account_name: str = ""
     realized_profit: int = 0
     dividends: int = 0
+    asset_class: str = ""
+    region: str = ""
 
     @property
     def cost_value(self) -> int:
@@ -355,6 +427,80 @@ class RecurringTransaction:
 
 
 @dataclass(frozen=True)
+class PlannedTransaction:
+    id: int
+    date: str
+    kind: str
+    amount: int
+    currency: str = "CNY"
+    account_id: int = 0
+    account_name: str = ""
+    category_id: int | None = None
+    category_name: str = ""
+    to_account_id: int | None = None
+    to_account_name: str = ""
+    payee: str = ""
+    note: str = ""
+    status: str = "planned"
+    transaction_id: int | None = None
+    created_at: str = ""
+
+    @property
+    def is_open(self) -> bool:
+        return self.status == "planned"
+
+    @property
+    def signed_amount(self) -> int:
+        if self.kind == "income":
+            return self.amount
+        if self.kind == "expense":
+            return -self.amount
+        return 0
+
+    @property
+    def title(self) -> str:
+        return self.payee or self.category_name or self.note or KIND_LABELS.get(self.kind, "")
+
+
+@dataclass(frozen=True)
+class Receivable:
+    id: int
+    direction: str
+    counterparty: str
+    amount: int
+    currency: str = "CNY"
+    date: str = ""
+    due_date: str | None = None
+    account_id: int | None = None
+    account_name: str = ""
+    note: str = ""
+    status: str = "open"
+    settled_at: str | None = None
+    created_at: str = ""
+
+    @property
+    def is_open(self) -> bool:
+        return self.status == "open"
+
+    @property
+    def is_receivable(self) -> bool:
+        return self.direction == "receivable"
+
+    @property
+    def signed_amount(self) -> int:
+        return self.amount if self.is_receivable else -self.amount
+
+    @property
+    def days_left(self) -> int | None:
+        if not self.due_date:
+            return None
+        try:
+            return (date.fromisoformat(self.due_date) - date.today()).days
+        except ValueError:
+            return None
+
+
+@dataclass(frozen=True)
 class Reconciliation:
     id: int
     account_id: int
@@ -566,6 +712,14 @@ class NetWorth:
         object.__setattr__(
             self, "liability_ratio", round(self.liabilities / total * 100, 1) if total else 0.0
         )
+
+
+@dataclass(frozen=True)
+class NetWorthPoint:
+    month: str
+    assets: int
+    liabilities: int
+    net: int
 
 
 @dataclass(frozen=True)

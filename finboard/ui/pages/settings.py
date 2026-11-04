@@ -51,6 +51,7 @@ class SettingsPage(Page):
 
         self._build_language()
         self._build_appearance()
+        self._build_notifications()
         self._build_currency()
         self._build_rates()
         self._build_categories()
@@ -103,6 +104,42 @@ class SettingsPage(Page):
         row.addWidget(self.theme_control)
         card.body.addLayout(row)
         self.body.addWidget(card)
+
+    def _build_notifications(self) -> None:
+        card = Card(padding=20, spacing=14)
+        card.add_header("提醒", "在后台关注预算、定期存款和还款日")
+        tray_row = self._row(
+            "托盘常驻",
+            "关闭窗口后继续在系统托盘运行，可从托盘快速记账或退出。",
+        )
+        self.tray_control = SegmentedControl(
+            [("启用", True), ("停用", False)],
+            self.window.settings.value("tray/enabled", True, type=bool),
+        )
+        self.tray_control.setFixedWidth(180)
+        self.tray_control.changed.connect(self._tray_changed)
+        tray_row.addWidget(self.tray_control)
+        card.body.addLayout(tray_row)
+        reminder_row = self._row(
+            "桌面提醒",
+            "启动时检查预算超支、定期存款到期、待确认定期交易和临近还款日。",
+        )
+        self.reminders_control = SegmentedControl(
+            [("启用", True), ("停用", False)],
+            self.window.settings.value("reminders/enabled", True, type=bool),
+        )
+        self.reminders_control.setFixedWidth(180)
+        self.reminders_control.changed.connect(self._reminders_changed)
+        reminder_row.addWidget(self.reminders_control)
+        card.body.addLayout(reminder_row)
+        self.body.addWidget(card)
+
+    def _tray_changed(self, enabled) -> None:
+        self.window.set_tray_enabled(bool(enabled))
+
+    def _reminders_changed(self, enabled) -> None:
+        self.window.settings.setValue("reminders/enabled", bool(enabled))
+        self.window.settings.sync()
 
     def _build_currency(self) -> None:
         card = Card(padding=20, spacing=14)
@@ -321,8 +358,10 @@ class SettingsPage(Page):
         meta.setProperty("role", "faint")
         about.body.addWidget(meta)
         shortcuts = QLabel(
-            "快捷键：Ctrl+N 记一笔 · Ctrl+F 搜索 · Ctrl+Z 撤销上一步 · "
-            "Ctrl+1…5 切换页面 · Ctrl+, 设置"
+            t(
+                "快捷键：Ctrl+N 记一笔 · Ctrl+Shift+N 复制上一笔 · Ctrl+F 搜索 · "
+                "Ctrl+Z 撤销上一步 · Ctrl+1…9 切换页面 · Ctrl+, 设置"
+            )
         )
         shortcuts.setProperty("role", "faint")
         shortcuts.setWordWrap(True)

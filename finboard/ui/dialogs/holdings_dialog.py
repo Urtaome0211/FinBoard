@@ -20,6 +20,7 @@ from ...core.models import Account, Holding
 from ...core.money import format_cents, format_quantity, parse_quantity, parse_signed_amount
 from ...core.service import FinanceService
 from ...i18n import t
+from ..charts import DonutChart
 from ..models import HoldingTableModel
 from ..theme import colors
 from ..widgets import (
@@ -78,6 +79,10 @@ class HoldingDialog(QDialog):
         self.dividends_input.setPlaceholderText(t("累计收到的现金分红"))
         self.note_input = QLineEdit()
         self.note_input.setPlaceholderText(t("可选备注，例如：长期持有"))
+        self.asset_class_input = QLineEdit()
+        self.asset_class_input.setPlaceholderText(t("例如：股票、债券、现金、另类"))
+        self.region_input = QLineEdit()
+        self.region_input.setPlaceholderText(t("例如：中国、美国、全球"))
 
         form.addRow(form_label(t("名称")), self.name_input)
         form.addRow(form_label(t("代码")), self.symbol_input)
@@ -86,6 +91,8 @@ class HoldingDialog(QDialog):
         form.addRow(form_label(t("现价")), self.price_input)
         form.addRow(form_label(t("已实现收益")), self.realized_input)
         form.addRow(form_label(t("累计分红")), self.dividends_input)
+        form.addRow(form_label(t("资产类别")), self.asset_class_input)
+        form.addRow(form_label(t("地区")), self.region_input)
         form.addRow(form_label(t("备注")), self.note_input)
         root.addLayout(form)
 
@@ -123,6 +130,8 @@ class HoldingDialog(QDialog):
             self.realized_input.setText(format_cents(holding.realized_profit, ""))
             self.dividends_input.setText(format_cents(holding.dividends, ""))
             self.note_input.setText(holding.note)
+            self.asset_class_input.setText(holding.asset_class)
+            self.region_input.setText(holding.region)
         self._update_preview()
 
     def _values(self) -> tuple[int, int, int]:
@@ -189,6 +198,8 @@ class HoldingDialog(QDialog):
                     note=self.note_input.text().strip(),
                     realized_profit=realized,
                     dividends=dividends,
+                    asset_class=self.asset_class_input.text().strip(),
+                    region=self.region_input.text().strip(),
                 )
             else:
                 self.service.add_holding(
@@ -201,6 +212,8 @@ class HoldingDialog(QDialog):
                     note=self.note_input.text().strip(),
                     realized_profit=realized,
                     dividends=dividends,
+                    asset_class=self.asset_class_input.text().strip(),
+                    region=self.region_input.text().strip(),
                 )
         except ValueError as exc:
             show_error(self.error, str(exc))
@@ -326,6 +339,7 @@ class HoldingsDialog(QDialog):
         self.total_value = ValueLabel("", size=18, weight=700)
         self.profit_value = ValueLabel("", size=18, weight=700)
         self.total_profit_value = ValueLabel("", size=18, weight=700)
+        self.xirr_value = ValueLabel("", size=18, weight=700)
         for label, widget in (
             (t("持仓成本"), self.cost_value),
             (t("当前市值"), self.market_value),
@@ -333,6 +347,7 @@ class HoldingsDialog(QDialog):
             (t("账户总值"), self.total_value),
             (t("浮动盈亏"), self.profit_value),
             (t("累计收益"), self.total_profit_value),
+            (t("年化 XIRR"), self.xirr_value),
         ):
             column = QVBoxLayout()
             column.setSpacing(2)
@@ -344,6 +359,17 @@ class HoldingsDialog(QDialog):
         summary_layout.addStretch(1)
         summary.setObjectName("SoftCard")
         root.addWidget(summary)
+
+        allocation_row = QHBoxLayout()
+        allocation_row.setSpacing(16)
+        self.allocation_chart = DonutChart()
+        self.allocation_chart.setMinimumSize(150, 150)
+        self.allocation_chart.setMaximumWidth(190)
+        allocation_row.addWidget(self.allocation_chart)
+        self.allocation_legend = QVBoxLayout()
+        self.allocation_legend.setSpacing(4)
+        allocation_row.addLayout(self.allocation_legend, 1)
+        root.addLayout(allocation_row)
 
         self.table = QTableView()
         self.model = HoldingTableModel(service, self)
@@ -486,10 +512,79 @@ class HoldingsDialog(QDialog):
                 dividends=self.service.format_money(summary.dividends, symbol),
             )
         )
+        self._update_allocation(rows, symbol)
+        rate = self.service.portfolio_xirr(self.account.id)
+        self.xirr_value.setText(
+            "—" if rate is None else f"{rate * 100:.2f}%"
+        )
+        self.xirr_value.set_tone(
+            "income"
+            if rate is not None and rate > 0
+            else "expense"
+            if rate is not None and rate < 0
+            else "muted"
+        )
+        self.xirr_value.setToolTip(
+            t("基于持仓成本、当前市值和创建日期估算；历史不足时显示 —")
+        )
         has_rows = bool(rows)
         self.table.setVisible(has_rows)
         self.empty.setVisible(not has_rows)
         self._selection_changed()
+
+    def _update_allocation(self, rows: list[Holding], symbol: str) -> None:
+        while self.allocation_legend.count():
+            item = self.allocation_legend.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        if not rows:
+            self.allocation_chart.set_data([], center_title=t("持仓市值"))
+            return
+        use_class = any(item.asset_class.strip() for item in rows)
+        grouped: dict[str, int] = {}
+        for item in rows:
+            key = item.asset_class.strip() if use_class else item.name
+            if not key:
+                key = t("未分类")
+            grouped[key] = grouped.get(key, 0) + item.market_value
+        ordered = sorted(grouped.items(), key=lambda pair: pair[1], reverse=True)
+        palette = colors()
+        swatches = [
+            palette.primary,
+            palette.info,
+            palette.income,
+            palette.warning,
+            palette.accent,
+            palette.expense,
+            palette.muted,
+        ]
+        top = ordered[:6]
+        if len(ordered) > 6:
+            top.append((t("其他"), sum(value for _, value in ordered[6:])))
+        total = sum(value for _, value in top) or 1
+        segments = [
+            (label, value, swatches[index % len(swatches)])
+            for index, (label, value) in enumerate(top)
+        ]
+        self.allocation_chart.set_data(
+            segments,
+            center_title=t("持仓市值"),
+            center_value=self.service.format_money(total, symbol),
+        )
+        for label, value, color in segments:
+            dot = QLabel("●")
+            dot.setStyleSheet(f"color: {color};")
+            text = QLabel(f"{label}  {value / total * 100:.1f}%")
+            text.setProperty("role", "muted")
+            line = QHBoxLayout()
+            line.setSpacing(6)
+            line.addWidget(dot)
+            line.addWidget(text, 1)
+            line.addStretch(1)
+            holder = QWidget()
+            holder.setLayout(line)
+            self.allocation_legend.addWidget(holder)
 
 
 __all__ = ["CashDialog", "HoldingDialog", "HoldingsDialog"]

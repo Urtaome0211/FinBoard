@@ -43,14 +43,19 @@ from .models import (
     CsvRule,
     FALLBACK_CATEGORY,
     FIXED_ASSET_TYPE_META,
+    Debt,
     FixedAsset,
+    FixedAssetValuation,
     ForecastPoint,
     Holding,
     HoldingsSummary,
     KIND_LABELS,
     MonthStats,
     NetWorth,
+    NetWorthPoint,
     PayeeSpend,
+    PlannedTransaction,
+    Receivable,
     Reconciliation,
     RecurringTransaction,
     SavingsGoal,
@@ -60,6 +65,17 @@ from .models import (
     TransactionBalance,
     TransactionFilter,
     TransactionSplit,
+)
+from .insights import FixedCost, detect_fixed_costs
+from .investing import xirr
+from .loans import (
+    CreditCycle,
+    Installment,
+    PayoffItem,
+    PayoffPlan,
+    amortization,
+    credit_cycle,
+    payoff_plan,
 )
 from .money import CURRENCIES, MAX_AMOUNT_CENTS, MAX_QUANTITY_UNITS
 from .rates import RateError, RateStore
@@ -314,6 +330,58 @@ class Repository:
                 return account.balance
         raise ValueError("账户不存在")
 
+    def account_balance_at(self, account_id: int, cutoff: str) -> int:
+        """Signed account balance at the end of ``cutoff`` (ISO day).
+
+        Investment accounts use their latest valuation on or before the day;
+        other accounts replay every transaction up to the day.
+        """
+        day = normalize_day(cutoff)
+        account = self.get_account(account_id, include_archived=True)
+        valuation = None
+        if account.type == "investment":
+            valuation = self.conn.execute(
+                "SELECT date, value FROM account_valuations"
+                " WHERE account_id = ? AND date <= ?"
+                " ORDER BY date DESC LIMIT 1",
+                (account_id, day),
+            ).fetchone()
+
+        flow_sql = """
+            SELECT COALESCE(SUM(CASE
+                WHEN t.kind = 'income'   AND t.account_id    = ? THEN  t.account_amount
+                WHEN t.kind = 'expense'  AND t.account_id    = ? THEN -t.account_amount
+                WHEN t.kind = 'transfer' AND t.account_id    = ?2
+                     THEN -(t.account_amount + CASE WHEN t.fee_included = 0
+                              THEN COALESCE(t.fee, 0) ELSE 0 END)
+                WHEN t.kind = 'transfer' AND t.to_account_id = ?2 THEN t.to_amount
+                ELSE 0 END), 0)
+            FROM transactions t
+            WHERE (t.account_id = ?2 OR t.to_account_id = ?2)
+        """
+        params: list[object] = [account_id, account_id]
+        if valuation is not None:
+            flow_sql += " AND t.date > ?"
+            params.append(valuation["date"])
+        flow_sql += " AND t.date <= ?"
+        params.append(day)
+        flows = int(self.conn.execute(flow_sql, tuple(params)).fetchone()[0])
+
+        if valuation is not None:
+            balance = (
+                int(valuation["value"]) + account.adjustment + flows
+            )
+        else:
+            balance = account.opening_balance + account.adjustment + flows
+            if account.type == "investment":
+                market = self.conn.execute(
+                    "SELECT COALESCE(SUM((quantity_units * price + 500000) / 1000000), 0)"
+                    " FROM holdings WHERE account_id = ?",
+                    (account_id,),
+                ).fetchone()[0]
+                balance += int(market)
+        return balance
+
     def withdrawal_fee(self, account_id: int, account_amount: int) -> int:
         """Fee charged when this account sends money out, in account cents."""
         account = self.get_account(account_id, include_archived=True)
@@ -347,6 +415,488 @@ class Repository:
     ) -> int:
         """Public wrapper used by the transaction dialog preview."""
         return self._available_before(account_id, exclude_transaction_id)
+
+    # ------------------------------------------------------------------ debts
+    @staticmethod
+    def _debt(row: sqlite3.Row, account: Account) -> Debt:
+        return Debt(
+            id=int(row["id"]),
+            account_id=int(row["account_id"]),
+            kind=row["kind"],
+            principal=int(row["principal"]),
+            annual_rate_bp=int(row["annual_rate_bp"]),
+            term_months=int(row["term_months"]),
+            start_date=row["start_date"],
+            payment_method=row["payment_method"],
+            billing_day=row["billing_day"],
+            due_day=row["due_day"],
+            credit_limit=int(row["credit_limit"]),
+            min_payment_bp=int(row["min_payment_bp"]),
+            note=row["note"] or "",
+            created_at=row["created_at"] or "",
+            account_name=account.name,
+            account_balance=account.balance,
+            currency=account.currency,
+        )
+
+    def debts(self) -> list[Debt]:
+        rows = self.conn.execute(
+            "SELECT * FROM debts ORDER BY kind, id"
+        ).fetchall()
+        return [
+            self._debt(
+                row,
+                self.get_account(int(row["account_id"]), include_archived=True),
+            )
+            for row in rows
+        ]
+
+    def get_debt(self, account_id: int) -> Debt | None:
+        row = self.conn.execute(
+            "SELECT * FROM debts WHERE account_id = ?", (account_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._debt(
+            row, self.get_account(account_id, include_archived=True)
+        )
+
+    def save_debt(
+        self,
+        account_id: int,
+        *,
+        kind: str,
+        principal: int = 0,
+        annual_rate_bp: int = 0,
+        term_months: int = 0,
+        start_date: str | None = None,
+        payment_method: str = "equal_payment",
+        billing_day: int | None = None,
+        due_day: int | None = None,
+        credit_limit: int = 0,
+        min_payment_bp: int = 1000,
+        note: str = "",
+    ) -> int:
+        account = self.get_account(account_id, include_archived=True)
+        if account.type not in ("loan", "credit"):
+            raise ValueError("只有贷款或信用卡账户可以设置负债计划")
+        expected = "loan" if account.type == "loan" else "credit"
+        if kind != expected:
+            raise ValueError("负债类型与账户类型不一致")
+        principal = int(principal)
+        annual_rate_bp = int(annual_rate_bp)
+        term_months = int(term_months)
+        credit_limit = int(credit_limit)
+        min_payment_bp = int(min_payment_bp)
+        if not 0 <= principal <= MAX_AMOUNT_CENTS:
+            raise ValueError("本金金额无效")
+        if not 0 <= annual_rate_bp <= 10000:
+            raise ValueError("年利率应在 0% 到 100% 之间")
+        if kind == "loan":
+            if term_months <= 0 or term_months > 720:
+                raise ValueError("贷款期限必须在 1 到 720 个月之间")
+            if payment_method not in ("equal_payment", "equal_principal"):
+                raise ValueError("不支持的还款方式")
+        else:
+            term_months = 0
+            if not 1 <= int(billing_day or 0) <= 28:
+                raise ValueError("账单日必须在 1 到 28 日之间")
+            if not 1 <= int(due_day or 0) <= 28:
+                raise ValueError("还款日必须在 1 到 28 日之间")
+        if not 0 <= credit_limit <= MAX_AMOUNT_CENTS:
+            raise ValueError("信用额度无效")
+        if not 0 <= min_payment_bp <= 10000:
+            raise ValueError("最低还款比例无效")
+        start = normalize_day(start_date) if start_date else today_iso()
+        note = str(note or "").strip()[:200]
+        stamp = now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO debts
+                (account_id, kind, principal, annual_rate_bp, term_months,
+                 start_date, payment_method, billing_day, due_day, credit_limit,
+                 min_payment_bp, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account_id) DO UPDATE SET
+                kind=excluded.kind,
+                principal=excluded.principal,
+                annual_rate_bp=excluded.annual_rate_bp,
+                term_months=excluded.term_months,
+                start_date=excluded.start_date,
+                payment_method=excluded.payment_method,
+                billing_day=excluded.billing_day,
+                due_day=excluded.due_day,
+                credit_limit=excluded.credit_limit,
+                min_payment_bp=excluded.min_payment_bp,
+                note=excluded.note,
+                updated_at=excluded.updated_at
+            """,
+            (
+                account_id,
+                kind,
+                principal,
+                annual_rate_bp,
+                term_months,
+                start,
+                payment_method,
+                int(billing_day) if billing_day is not None else None,
+                int(due_day) if due_day is not None else None,
+                credit_limit,
+                min_payment_bp,
+                note,
+                stamp,
+                stamp,
+            ),
+        )
+        self.conn.commit()
+        return account_id
+
+    def delete_debt(self, account_id: int) -> None:
+        self.conn.execute("DELETE FROM debts WHERE account_id = ?", (account_id,))
+        self.conn.commit()
+
+    def debt_schedule(self, account_id: int) -> list[Installment]:
+        debt = self.get_debt(account_id)
+        if debt is None or not debt.is_loan or debt.principal <= 0:
+            return []
+        return amortization(
+            debt.principal,
+            debt.annual_rate_bp,
+            debt.term_months,
+            debt.start_date or today_iso(),
+            debt.payment_method,
+        )
+
+    def debt_credit_cycle(self, account_id: int) -> CreditCycle | None:
+        debt = self.get_debt(account_id)
+        if debt is None or not debt.is_credit:
+            return None
+        return credit_cycle(
+            int(debt.billing_day or 1), int(debt.due_day or 1), today_iso()
+        )
+
+    def _loan_next_payment(self, debt: Debt) -> int:
+        schedule = self.debt_schedule(debt.account_id)
+        if not schedule:
+            return max(0, debt.outstanding)
+        current = today_iso()
+        for row in schedule:
+            if row.date >= current:
+                return row.payment
+        return max(0, debt.outstanding)
+
+    def debt_payoff_plan(
+        self, *, extra_monthly: int = 0, method: str = "avalanche"
+    ) -> PayoffPlan:
+        items: list[PayoffItem] = []
+        for debt in self.debts():
+            if debt.outstanding <= 0:
+                continue
+            minimum = (
+                debt.min_payment
+                if debt.is_credit
+                else self._loan_next_payment(debt)
+            )
+            if minimum <= 0:
+                minimum = debt.outstanding
+            items.append(
+                PayoffItem(
+                    name=debt.account_name,
+                    balance=debt.outstanding,
+                    annual_rate_bp=debt.annual_rate_bp,
+                    min_payment=minimum,
+                )
+            )
+        if not items:
+            return PayoffPlan(months=0, total_interest=0, order=(), rows=())
+        return payoff_plan(
+            items, extra_monthly=int(extra_monthly), method=method
+        )
+
+    # ------------------------------------------------------------- planned
+    @staticmethod
+    def _planned(row: sqlite3.Row) -> PlannedTransaction:
+        return PlannedTransaction(
+            id=int(row["id"]),
+            date=row["date"],
+            kind=row["kind"],
+            amount=int(row["amount"]),
+            currency=row["currency"] or "CNY",
+            account_id=int(row["account_id"]),
+            account_name=row["account_name"] or "",
+            category_id=row["category_id"],
+            category_name=row["category_name"] or "",
+            to_account_id=row["to_account_id"],
+            to_account_name=row["to_account_name"] or "",
+            payee=row["payee"] or "",
+            note=row["note"] or "",
+            status=row["status"],
+            transaction_id=row["transaction_id"],
+            created_at=row["created_at"] or "",
+        )
+
+    def planned_transactions(
+        self, *, status: str | None = None
+    ) -> list[PlannedTransaction]:
+        sql = """
+            SELECT p.*, a.name AS account_name, ta.name AS to_account_name,
+                   c.name AS category_name
+            FROM planned_transactions p
+            JOIN accounts a ON a.id = p.account_id
+            LEFT JOIN accounts ta ON ta.id = p.to_account_id
+            LEFT JOIN categories c ON c.id = p.category_id
+        """
+        params: tuple[object, ...] = ()
+        if status is not None:
+            sql += " WHERE p.status = ?"
+            params = (status,)
+        sql += " ORDER BY p.date, p.id"
+        return [self._planned(row) for row in self.conn.execute(sql, params)]
+
+    def get_planned_transaction(self, planned_id: int) -> PlannedTransaction:
+        for item in self.planned_transactions():
+            if item.id == planned_id:
+                return item
+        raise ValueError("计划交易不存在")
+
+    def add_planned_transaction(
+        self,
+        date: str,
+        kind: str,
+        amount: int,
+        account_id: int,
+        category_id: int | None = None,
+        to_account_id: int | None = None,
+        payee: str = "",
+        note: str = "",
+        currency: str = "CNY",
+    ) -> int:
+        self._validate_txn(
+            kind=kind,
+            amount=amount,
+            account_id=account_id,
+            category_id=category_id,
+            to_account_id=to_account_id,
+            currency=currency,
+        )
+        cursor = self.conn.execute(
+            "INSERT INTO planned_transactions"
+            " (date, kind, amount, currency, account_id, category_id,"
+            "  to_account_id, payee, note, status, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?)",
+            (
+                normalize_day(date),
+                kind,
+                int(amount),
+                currency,
+                account_id,
+                category_id,
+                to_account_id,
+                str(payee or "").strip()[:80],
+                str(note or "").strip()[:200],
+                now_iso(),
+                now_iso(),
+            ),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def update_planned_transaction(
+        self,
+        planned_id: int,
+        *,
+        date: str,
+        kind: str,
+        amount: int,
+        account_id: int,
+        category_id: int | None = None,
+        to_account_id: int | None = None,
+        payee: str = "",
+        note: str = "",
+        currency: str = "CNY",
+    ) -> None:
+        item = self.get_planned_transaction(planned_id)
+        if item.status != "planned":
+            raise ValueError("已完成的计划不能修改")
+        self._validate_txn(
+            kind=kind,
+            amount=amount,
+            account_id=account_id,
+            category_id=category_id,
+            to_account_id=to_account_id,
+            currency=currency,
+        )
+        self.conn.execute(
+            "UPDATE planned_transactions SET date=?, kind=?, amount=?, currency=?,"
+            " account_id=?, category_id=?, to_account_id=?, payee=?, note=?,"
+            " updated_at=? WHERE id=?",
+            (
+                normalize_day(date),
+                kind,
+                int(amount),
+                currency,
+                account_id,
+                category_id,
+                to_account_id,
+                str(payee or "").strip()[:80],
+                str(note or "").strip()[:200],
+                now_iso(),
+                planned_id,
+            ),
+        )
+        self.conn.commit()
+
+    def confirm_planned_transaction(self, planned_id: int) -> int:
+        item = self.get_planned_transaction(planned_id)
+        if item.status != "planned":
+            raise ValueError("计划交易已经处理过了")
+        transaction_id = self.add_transaction(
+            date=item.date,
+            kind=item.kind,
+            amount=item.amount,
+            account_id=item.account_id,
+            category_id=item.category_id,
+            to_account_id=item.to_account_id,
+            payee=item.payee,
+            note=item.note,
+            currency=item.currency,
+        )
+        self.conn.execute(
+            "UPDATE planned_transactions SET status='done', transaction_id=?,"
+            " updated_at=? WHERE id=?",
+            (transaction_id, now_iso(), planned_id),
+        )
+        self.conn.commit()
+        return transaction_id
+
+    def cancel_planned_transaction(self, planned_id: int) -> None:
+        item = self.get_planned_transaction(planned_id)
+        if item.status != "planned":
+            raise ValueError("计划交易已经处理过了")
+        self.conn.execute(
+            "UPDATE planned_transactions SET status='cancelled', updated_at=?"
+            " WHERE id=?",
+            (now_iso(), planned_id),
+        )
+        self.conn.commit()
+
+    def delete_planned_transaction(self, planned_id: int) -> None:
+        self.conn.execute(
+            "DELETE FROM planned_transactions WHERE id = ?", (planned_id,)
+        )
+        self.conn.commit()
+
+    # ---------------------------------------------------------- receivables
+    @staticmethod
+    def _receivable(row: sqlite3.Row) -> Receivable:
+        return Receivable(
+            id=int(row["id"]),
+            direction=row["direction"],
+            counterparty=row["counterparty"],
+            amount=int(row["amount"]),
+            currency=row["currency"] or "CNY",
+            date=row["date"],
+            due_date=row["due_date"],
+            account_id=row["account_id"],
+            account_name=row["account_name"] or "",
+            note=row["note"] or "",
+            status=row["status"],
+            settled_at=row["settled_at"],
+            created_at=row["created_at"] or "",
+        )
+
+    def receivables(self, *, status: str | None = None) -> list[Receivable]:
+        sql = """
+            SELECT r.*, a.name AS account_name
+            FROM receivables r
+            LEFT JOIN accounts a ON a.id = r.account_id
+        """
+        params: tuple[object, ...] = ()
+        if status is not None:
+            sql += " WHERE r.status = ?"
+            params = (status,)
+        sql += " ORDER BY r.status, r.due_date, r.id"
+        return [self._receivable(row) for row in self.conn.execute(sql, params)]
+
+    def receivables_totals(self) -> dict[str, int]:
+        receivable = 0
+        payable = 0
+        for item in self.receivables(status="open"):
+            value = self._to_base(item.amount, item.currency, item.date)
+            if item.direction == "receivable":
+                receivable += value
+            else:
+                payable += value
+        return {"receivable": receivable, "payable": payable}
+
+    def add_receivable(
+        self,
+        *,
+        direction: str,
+        counterparty: str,
+        amount: int,
+        currency: str = "CNY",
+        date: str | None = None,
+        due_date: str | None = None,
+        account_id: int | None = None,
+        note: str = "",
+    ) -> int:
+        if direction not in ("receivable", "payable"):
+            raise ValueError("往来款方向无效")
+        counterparty = self._clean_name(counterparty, "对方名称", 60)
+        amount = int(amount)
+        if amount <= 0 or amount > MAX_AMOUNT_CENTS:
+            raise ValueError("往来款金额必须大于 0")
+        if currency not in CURRENCIES:
+            raise ValueError("不支持的币种")
+        day = normalize_day(date) if date else today_iso()
+        due = normalize_day(due_date) if due_date else None
+        if due and due < day:
+            raise ValueError("到期日不能早于发生日")
+        if account_id is not None:
+            self.get_account(int(account_id))
+        cursor = self.conn.execute(
+            "INSERT INTO receivables"
+            " (direction, counterparty, amount, currency, date, due_date,"
+            "  account_id, note, status, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+            (
+                direction,
+                counterparty,
+                amount,
+                currency,
+                day,
+                due,
+                account_id,
+                str(note or "").strip()[:200],
+                now_iso(),
+                now_iso(),
+            ),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def settle_receivable(self, receivable_id: int) -> None:
+        self.conn.execute(
+            "UPDATE receivables SET status='settled', settled_at=?, updated_at=?"
+            " WHERE id=? AND status='open'",
+            (today_iso(), now_iso(), receivable_id),
+        )
+        self.conn.commit()
+
+    def reopen_receivable(self, receivable_id: int) -> None:
+        self.conn.execute(
+            "UPDATE receivables SET status='open', settled_at=NULL, updated_at=?"
+            " WHERE id=?",
+            (now_iso(), receivable_id),
+        )
+        self.conn.commit()
+
+    def delete_receivable(self, receivable_id: int) -> None:
+        self.conn.execute(
+            "DELETE FROM receivables WHERE id = ?", (receivable_id,)
+        )
+        self.conn.commit()
 
     # ------------------------------------------------------------- recurring
     def _clean_recurring(
@@ -979,6 +1529,8 @@ class Repository:
             account_name=row["account_name"] or "",
             realized_profit=int(row["realized_profit"] or 0),
             dividends=int(row["dividends"] or 0),
+            asset_class=row["asset_class"] or "",
+            region=row["region"] or "",
         )
 
     def _validate_holding(
@@ -1017,6 +1569,7 @@ class Repository:
         sql = (
             "SELECT h.id, h.account_id, h.symbol, h.name, h.quantity_units,"
             " h.cost_price, h.price, h.note, h.created_at, h.realized_profit, h.dividends,"
+            " h.asset_class, h.region,"
             " a.currency AS currency, a.name AS account_name"
             " FROM holdings h JOIN accounts a ON a.id = h.account_id"
         )
@@ -1031,6 +1584,7 @@ class Repository:
         row = self.conn.execute(
             "SELECT h.id, h.account_id, h.symbol, h.name, h.quantity_units,"
             " h.cost_price, h.price, h.note, h.created_at, h.realized_profit, h.dividends,"
+            " h.asset_class, h.region,"
             " a.currency AS currency, a.name AS account_name"
             " FROM holdings h JOIN accounts a ON a.id = h.account_id WHERE h.id = ?",
             (holding_id,),
@@ -1051,6 +1605,8 @@ class Repository:
         note: str = "",
         realized_profit: int = 0,
         dividends: int = 0,
+        asset_class: str = "",
+        region: str = "",
     ) -> int:
         name, quantity_units, cost_price, price = self._validate_holding(
             account_id, name, quantity_units, cost_price, price
@@ -1060,8 +1616,9 @@ class Repository:
         )
         cursor = self.conn.execute(
             "INSERT INTO holdings (account_id, symbol, name, quantity_units,"
-            " cost_price, price, note, realized_profit, dividends, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " cost_price, price, note, realized_profit, dividends,"
+            " asset_class, region, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 int(account_id),
                 str(symbol or "").strip().upper()[:20],
@@ -1072,6 +1629,8 @@ class Repository:
                 str(note or "").strip()[:200],
                 realized_profit,
                 dividends,
+                str(asset_class or "").strip()[:40],
+                str(region or "").strip()[:40],
                 now_iso(),
             ),
         )
@@ -1091,6 +1650,8 @@ class Repository:
         note: str = "",
         realized_profit: int = 0,
         dividends: int = 0,
+        asset_class: str = "",
+        region: str = "",
     ) -> None:
         self.get_holding(holding_id)
         name, quantity_units, cost_price, price = self._validate_holding(
@@ -1102,7 +1663,8 @@ class Repository:
         self.conn.execute(
             "UPDATE holdings SET account_id = ?, symbol = ?, name = ?,"
             " quantity_units = ?, cost_price = ?, price = ?, note = ?,"
-            " realized_profit = ?, dividends = ?, updated_at = ?"
+            " realized_profit = ?, dividends = ?, asset_class = ?, region = ?,"
+            " updated_at = ?"
             " WHERE id = ?",
             (
                 int(account_id),
@@ -1114,6 +1676,8 @@ class Repository:
                 str(note or "").strip()[:200],
                 realized_profit,
                 dividends,
+                str(asset_class or "").strip()[:40],
+                str(region or "").strip()[:40],
                 now_iso(),
                 holding_id,
             ),
@@ -1147,6 +1711,30 @@ class Repository:
             realized=realized,
             dividends=dividends,
         )
+
+    def portfolio_xirr(self, account_id: int | None = None) -> float | None:
+        """Estimate the annualized return from holding cost to today's value."""
+        rows = self.holdings(account_id)
+        today = date_cls.today()
+        flows: list[tuple[date_cls, int]] = []
+        for item in rows:
+            if item.cost_value <= 0:
+                continue
+            try:
+                start = date_cls.fromisoformat((item.created_at or "")[:10])
+            except ValueError:
+                start = today
+            flows.append(
+                (start, -self._to_base(item.cost_value, item.currency, start.isoformat()))
+            )
+            ending = item.market_value + item.realized_profit + item.dividends
+            flows.append(
+                (
+                    today,
+                    self._to_base(ending, item.currency, today.isoformat()),
+                )
+            )
+        return xirr(flows)
 
     def set_cash_balance(self, account_id: int, target: int) -> int:
         """Set the cash portion of an investment account without touching holdings."""
@@ -1188,6 +1776,29 @@ class Repository:
             currency=row["currency"] or "CNY",
             note=row["note"] or "",
             created_at=row["created_at"] or "",
+        )
+
+    @staticmethod
+    def _fixed_asset_valuation(row: sqlite3.Row) -> FixedAssetValuation:
+        return FixedAssetValuation(
+            id=int(row["id"]),
+            asset_id=int(row["asset_id"]),
+            value=int(row["value"]),
+            valued_on=row["valued_on"],
+            note=row["note"] or "",
+            created_at=row["created_at"] or "",
+        )
+
+    def _record_fixed_valuation(
+        self, asset_id: int, value: int, valued_on: str, note: str = ""
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO fixed_asset_valuations"
+            " (asset_id, value, valued_on, note, created_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(asset_id, valued_on)"
+            " DO UPDATE SET value=excluded.value, note=excluded.note",
+            (asset_id, int(value), valued_on, note, now_iso()),
         )
 
     def _validate_fixed_asset(
@@ -1252,8 +1863,12 @@ class Repository:
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (*values, stamp),
         )
+        asset_id = int(cursor.lastrowid)
+        self._record_fixed_valuation(
+            asset_id, int(values[3]), str(values[4])
+        )
         self.conn.commit()
-        return int(cursor.lastrowid)
+        return asset_id
 
     def update_fixed_asset(
         self,
@@ -1276,6 +1891,9 @@ class Repository:
             " valuation_date=?, currency=?, note=?, updated_at=? WHERE id=?",
             (*values, now_iso(), asset_id),
         )
+        self._record_fixed_valuation(
+            asset_id, int(values[3]), str(values[4]), str(values[6])
+        )
         self.conn.commit()
 
     def delete_fixed_asset(self, asset_id: int) -> None:
@@ -1286,6 +1904,63 @@ class Repository:
         total = 0
         for asset in self.fixed_assets():
             total += self._to_base(asset.current_value, asset.currency, asset.valuation_date)
+        return total
+
+    def fixed_asset_valuations(
+        self, asset_id: int | None = None
+    ) -> list[FixedAssetValuation]:
+        if asset_id is None:
+            rows = self.conn.execute(
+                "SELECT * FROM fixed_asset_valuations"
+                " ORDER BY valued_on DESC, id DESC"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM fixed_asset_valuations WHERE asset_id = ?"
+                " ORDER BY valued_on DESC, id DESC",
+                (asset_id,),
+            ).fetchall()
+        return [self._fixed_asset_valuation(row) for row in rows]
+
+    def record_fixed_asset_valuation(
+        self, asset_id: int, value: int, valued_on: str, note: str = ""
+    ) -> None:
+        asset = self.get_fixed_asset(asset_id)
+        value = int(value)
+        if value < 0 or value > MAX_AMOUNT_CENTS:
+            raise ValueError("资产金额无效")
+        day = normalize_day(valued_on)
+        if day < asset.valuation_date:
+            # Historical entries are kept as a series, not used to rewrite
+            # the current value backwards.
+            self._record_fixed_valuation(asset_id, value, day, note)
+            self.conn.commit()
+            return
+        self.conn.execute(
+            "UPDATE fixed_assets SET current_value = ?, valuation_date = ?,"
+            " updated_at = ? WHERE id = ?",
+            (value, day, now_iso(), asset_id),
+        )
+        self._record_fixed_valuation(asset_id, value, day, note)
+        self.conn.commit()
+
+    def fixed_asset_value_at(self, cutoff: str) -> int:
+        day = normalize_day(cutoff)
+        rows = self.conn.execute(
+            """
+            SELECT fa.currency,
+                   COALESCE((
+                       SELECT v.value FROM fixed_asset_valuations v
+                       WHERE v.asset_id = fa.id AND v.valued_on <= ?
+                       ORDER BY v.valued_on DESC LIMIT 1
+                   ), fa.purchase_price) AS value
+            FROM fixed_assets fa
+            """,
+            (day,),
+        ).fetchall()
+        total = 0
+        for row in rows:
+            total += self._to_base(int(row["value"]), row["currency"], day)
         return total
 
     # --------------------------------------------------------------- savings
@@ -3093,6 +3768,56 @@ class Repository:
             liability_accounts=sum(1 for account in accounts if account.group == "liability"),
         )
 
+    def net_worth_history(
+        self, months: int = 12, end_month: str | None = None
+    ) -> list[NetWorthPoint]:
+        """Month-end net worth reconstructed from account flows and valuations."""
+        months = max(1, min(int(months), 60))
+        end_month = end_month or month_of(today())
+        labels = recent_months(months, end_month)
+        accounts = self.accounts(include_archived=True)
+        points: list[NetWorthPoint] = []
+        for label in labels:
+            if label == end_month:
+                current = self.net_worth()
+                assets = current.account_assets + current.fixed_assets
+                liabilities = current.liabilities
+                points.append(
+                    NetWorthPoint(
+                        month=label,
+                        assets=assets,
+                        liabilities=liabilities,
+                        net=assets - liabilities,
+                    )
+                )
+                continue
+            _, exclusive_end = month_bounds(label)
+            last_day = (
+                date_cls.fromisoformat(exclusive_end) - timedelta(days=1)
+            ).isoformat()
+            assets = 0
+            liabilities = 0
+            for account in accounts:
+                value = self._to_base(
+                    self.account_balance_at(account.id, last_day),
+                    account.currency,
+                    last_day,
+                )
+                if account.group == "liability":
+                    liabilities += abs(value)
+                else:
+                    assets += value
+            assets += self.fixed_asset_value_at(last_day)
+            points.append(
+                NetWorthPoint(
+                    month=label,
+                    assets=assets,
+                    liabilities=liabilities,
+                    net=assets - liabilities,
+                )
+            )
+        return points
+
     def cash_flow_forecast(
         self, months: int = 6, start_month: str | None = None
     ) -> list[ForecastPoint]:
@@ -3156,10 +3881,26 @@ class Repository:
                 )
 
         points: list[ForecastPoint] = []
+        planned = {"income": {}, "expense": {}}
+        for item in self.planned_transactions(status="planned"):
+            if item.kind not in planned or item.date < start or item.date >= horizon_end:
+                continue
+            month = item.date[:7]
+            planned[item.kind][month] = planned[item.kind].get(month, 0) + self._to_base(
+                item.amount, item.currency, item.date
+            )
         cash = start_cash
         for month in labels:
-            income = average["income"] + recurring["income"].get(month, 0)
-            expense = average["expense"] + recurring["expense"].get(month, 0)
+            income = (
+                average["income"]
+                + recurring["income"].get(month, 0)
+                + planned["income"].get(month, 0)
+            )
+            expense = (
+                average["expense"]
+                + recurring["expense"].get(month, 0)
+                + planned["expense"].get(month, 0)
+            )
             net = income - expense
             cash += net
             points.append(
@@ -3388,6 +4129,73 @@ class Repository:
         return best[1] if best else None
 
     # ----------------------------------------------------------------- budgets
+    def expense_history(self, months: int = 12) -> list[Transaction]:
+        """Expenses from the recent ``months``, newest first."""
+        cutoff = add_months(today_iso(), -max(1, int(months)))
+        rows = self.conn.execute(
+            _TXN_SELECT
+            + " WHERE t.kind = 'expense' AND t.date >= ?"
+            " ORDER BY t.date DESC, t.id DESC",
+            (cutoff,),
+        ).fetchall()
+        return self._hydrate([self._transaction(row) for row in rows])
+
+    def tag_breakdown(
+        self, month: str | None = None, kind: str = "expense"
+    ) -> list[CategorySpend]:
+        """Spending grouped by tag (a transaction may appear under many tags)."""
+        if kind not in ("expense", "income"):
+            raise ValueError("类型必须是支出或收入")
+        sql = (
+            "SELECT tg.id, tg.name, tg.color, t.amount, t.currency, t.date"
+            " FROM transactions t"
+            " JOIN transaction_tags tt ON tt.transaction_id = t.id"
+            " JOIN tags tg ON tg.id = tt.tag_id"
+            " WHERE t.kind = ?"
+        )
+        params: list[object] = [kind]
+        if month:
+            start, end = month_bounds(month)
+            sql += " AND t.date >= ? AND t.date < ?"
+            params.extend([start, end])
+        grouped: dict[int, list] = {}
+        for row in self.conn.execute(sql, params):
+            grouped.setdefault(int(row["id"]), []).append(row)
+        result: list[CategorySpend] = []
+        for rows in grouped.values():
+            amount = sum(
+                self._to_base(int(row["amount"]), row["currency"], row["date"])
+                for row in rows
+            )
+            result.append(
+                CategorySpend(
+                    category_id=int(rows[0]["id"]),
+                    name=rows[0]["name"],
+                    color=rows[0]["color"],
+                    amount=amount,
+                )
+            )
+        result.sort(key=lambda item: (-item.amount, item.category_id))
+        return result
+
+    def daily_expense(self, month: str, kind: str = "expense") -> dict[str, int]:
+        """Amount per day for a month, used by the spending calendar."""
+        if kind not in ("expense", "income"):
+            raise ValueError("类型必须是支出或收入")
+        start, end = month_bounds(month)
+        rows = self.conn.execute(
+            "SELECT date, amount, currency FROM transactions"
+            " WHERE kind = ? AND date >= ? AND date < ?",
+            (kind, start, end),
+        ).fetchall()
+        totals: dict[str, int] = {}
+        for row in rows:
+            day = str(row["date"])
+            totals[day] = totals.get(day, 0) + self._to_base(
+                int(row["amount"]), row["currency"], day
+            )
+        return totals
+
     def _budget_spent(self, month: str, category_id: int) -> int:
         spent = {item.category_id: item.amount for item in self.category_breakdown(month)}
         return sum(spent.values()) if category_id == 0 else spent.get(category_id, 0)
@@ -3744,6 +4552,10 @@ class Repository:
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM transactions")
             conn.execute("DELETE FROM term_deposits")
+            conn.execute("DELETE FROM planned_transactions")
+            conn.execute("DELETE FROM receivables")
+            conn.execute("DELETE FROM debts")
+            conn.execute("DELETE FROM fixed_asset_valuations")
             conn.execute("DELETE FROM category_rules")
             conn.execute("DELETE FROM undo_log")
             conn.execute("DELETE FROM budgets")
@@ -3753,7 +4565,9 @@ class Repository:
             conn.execute(
                 "DELETE FROM sqlite_sequence WHERE name IN"
                 " ('transactions','budgets','accounts','categories',"
-                "  'category_rules','undo_log','term_deposits')"
+                "  'category_rules','undo_log','term_deposits',"
+                "  'planned_transactions','receivables','debts',"
+                "  'fixed_asset_valuations')"
             )
             if seed_defaults:
                 Database._seed_defaults(conn)
