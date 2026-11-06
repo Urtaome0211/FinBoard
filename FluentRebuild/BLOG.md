@@ -20,7 +20,7 @@ FinBoard（财观）是一个本地优先的个人财务桌面应用：Python + 
 2. **独立包名**：`finboard_fluent`，避免和原 `finboard` 包在同一环境里冲突。
 3. **共用数据库**：仍然打开 `%LOCALAPPDATA%\FinBoard\finboard.db`，schema 保持 15。
 4. **不改坏 5.0**：原项目继续可用，重构全部放在 `FluentRebuild/`。
-5. **不上传 GitHub**：本地交付，不 commit、不 push、不建 Release。
+5. **发布方式**：最终版本 5.3.0 按要求打包并发布到 GitHub Releases；开发过程中不提前上传。
 
 这几条决定了策略：**只换壳，不换业务**。`core/` 原样复制，页面布局尽量复用，主窗口、导航、标题栏、提示条重写。
 
@@ -512,4 +512,4 @@ Qt 没有跨平台的全局快捷键。Windows 下用 `RegisterHotKey` + `QAbstr
 
 ---
 
-*本文对应的代码在 `FluentRebuild/`，版本 5.3.0；未上传 GitHub。*
+*本文对应的代码在 `FluentRebuild/`，版本 5.3.0，已发布到 [GitHub Releases](https://github.com/Urtaome0211/FinBoard/releases/tag/v5.3)。*
