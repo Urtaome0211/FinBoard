@@ -43,7 +43,7 @@ class V43Test(unittest.TestCase):
 
     def test_schema_v14_has_system_accounts_and_deposits(self) -> None:
         self.assertEqual(
-            self.db.conn.execute("PRAGMA user_version").fetchone()[0], 15
+            self.db.conn.execute("PRAGMA user_version").fetchone()[0], 17
         )
         account_columns = {
             row["name"]

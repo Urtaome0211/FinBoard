@@ -180,6 +180,28 @@ class Debt:
 
 
 @dataclass(frozen=True)
+class DebtPayment:
+    """A repayment recorded against a loan or credit-card liability."""
+
+    id: int
+    account_id: int
+    paid_on: str
+    amount: int
+    principal: int = 0
+    interest: int = 0
+    transfer_id: int | None = None
+    interest_transaction_id: int | None = None
+    note: str = ""
+    created_at: str = ""
+    account_name: str = ""
+    currency: str = "CNY"
+
+    @property
+    def is_interest_only(self) -> bool:
+        return self.principal <= 0 and self.interest > 0
+
+
+@dataclass(frozen=True)
 class FixedAssetValuation:
     id: int
     asset_id: int
@@ -234,6 +256,85 @@ class Holding:
         if self.cost_value <= 0:
             return 0.0
         return round(self.total_profit / self.cost_value * 100, 2)
+
+
+@dataclass(frozen=True)
+class InvestmentTrade:
+    """A buy, sell or dividend event for an investment account."""
+
+    id: int
+    account_id: int
+    symbol: str
+    name: str
+    kind: str
+    trade_date: str
+    quantity_units: int = 0
+    price: int = 0
+    fee: int = 0
+    amount: int = 0
+    currency: str = "CNY"
+    note: str = ""
+    created_at: str = ""
+    account_name: str = ""
+
+    @property
+    def gross_value(self) -> int:
+        return (self.quantity_units * self.price + 500_000) // 1_000_000
+
+    @property
+    def net_value(self) -> int:
+        if self.kind == "dividend":
+            return self.amount
+        if self.kind == "buy":
+            return self.gross_value + self.fee
+        return self.gross_value - self.fee
+
+    @property
+    def label(self) -> str:
+        return {"buy": "买入", "sell": "卖出", "dividend": "分红"}.get(
+            self.kind, self.kind
+        )
+
+
+@dataclass(frozen=True)
+class InvestmentLot:
+    """A FIFO lot created by a buy trade."""
+
+    id: int
+    trade_id: int
+    account_id: int
+    symbol: str
+    name: str
+    acquired_date: str
+    quantity_units: int
+    remaining_units: int
+    unit_cost: int
+    currency: str = "CNY"
+    created_at: str = ""
+
+    @property
+    def cost_value(self) -> int:
+        return (self.remaining_units * self.unit_cost + 500_000) // 1_000_000
+
+    @property
+    def remaining_ratio(self) -> float:
+        if self.quantity_units <= 0:
+            return 0.0
+        return round(self.remaining_units / self.quantity_units * 100, 1)
+
+
+@dataclass(frozen=True)
+class InvestmentDisposal:
+    """One FIFO allocation produced by a sell trade."""
+
+    id: int
+    sell_trade_id: int
+    lot_id: int
+    quantity_units: int
+    cost: int
+    proceeds: int
+    realized: int
+    created_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -731,6 +832,38 @@ class CategorySpend:
 
 
 @dataclass(frozen=True)
+class RangeReport:
+    """Totals and breakdowns for an arbitrary date range."""
+
+    start_date: str
+    end_date: str
+    income: int
+    expense: int
+    previous_income: int
+    previous_expense: int
+    year_income: int
+    year_expense: int
+    breakdown: tuple[CategorySpend, ...] = ()
+    trend: tuple[MonthStats, ...] = ()
+
+    @property
+    def net(self) -> int:
+        return self.income - self.expense
+
+    @property
+    def savings_rate(self) -> float:
+        if self.income <= 0:
+            return 0.0
+        return round(self.net / self.income * 100, 1)
+
+    @staticmethod
+    def change(current: int, previous: int) -> float | None:
+        if previous == 0:
+            return None
+        return round((current - previous) / abs(previous) * 100, 1)
+
+
+@dataclass(frozen=True)
 class BudgetLine:
     id: int
     month: str
@@ -788,6 +921,8 @@ class CategoryRule:
 @dataclass
 class TransactionFilter:
     month: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
     kind: str | None = None
     category_id: int | None = None
     account_id: int | None = None

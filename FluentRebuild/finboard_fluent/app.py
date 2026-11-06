@@ -16,7 +16,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from . import __app_name__, __app_name_cn__, __version__
-from .core.backup import create_backup, latest_backup, quick_check
+from .core.backup import create_backup, latest_backup, quick_check, repair_indexes
 from .core.database import Database
 from .core.models import TransactionFilter
 from .core.paths import default_db_path, demo_db_path, log_path, portable_data_dir
@@ -106,16 +106,27 @@ def _set_windows_app_id() -> None:
 
 def _startup_maintenance(
     db: Database, settings: QSettings
-) -> tuple[bool, str]:
-    """Check the database, then create a daily automatic backup when needed."""
+) -> tuple[bool, str, bool]:
+    """Check the database, repair index damage, then create a daily backup."""
     ok, detail = quick_check(db)
+    repaired = False
     if not ok:
-        log.error("Database integrity check failed: %s", detail)
-        return False, detail
+        from .core.backup import looks_like_index_problem
+
+        if looks_like_index_problem(detail):
+            log.warning("Database index check failed, rebuilding indexes: %s", detail)
+            ok, detail = repair_indexes(db)
+            repaired = ok
+            if not ok:
+                log.error("Database index repair failed: %s", detail)
+                return False, detail, False
+        else:
+            log.error("Database integrity check failed: %s", detail)
+            return False, detail, False
     if str(db.path) == ":memory:":
-        return True, ""
+        return True, "", repaired
     if not settings.value("backup/auto", True, type=bool):
-        return True, ""
+        return True, "", repaired
     try:
         newest = latest_backup(db.path)
         stale = newest is None or (time.time() - newest.stat().st_mtime) > 20 * 3600
@@ -124,7 +135,7 @@ def _startup_maintenance(
             create_backup(db, keep=keep)
     except Exception:  # a backup failure must never block the app
         log.exception("Automatic backup failed")
-    return True, ""
+    return True, "", repaired
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     _install_excepthook()
     db, fallback = _open_database(Path(db_path), allow_fallback=args.db is None)
     repo = Repository(db)
-    integrity_ok, integrity_detail = _startup_maintenance(db, settings)
+    integrity_ok, integrity_detail, integrity_repaired = _startup_maintenance(db, settings)
     if args.reset_demo or (
         (args.demo or args.reset_demo) and repo.count_transactions(TransactionFilter(limit=1)) == 0
     ):
@@ -169,7 +180,11 @@ def main(argv: list[str] | None = None) -> int:
     service = FinanceService(repo, str(settings.value("currency", "CNY")))
 
     window = MainWindow(
-        service, settings, language=initial_language, theme=initial_theme
+        service,
+        settings,
+        language=initial_language,
+        theme=initial_theme,
+        auto_refresh_rates=not args.smoke_test,
     )
     window.show()
     if fallback is not None:
@@ -190,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     def _shutdown() -> None:
+        try:
+            window.shutdown()
+        except Exception:
+            pass
         try:
             db.close()
         except Exception:

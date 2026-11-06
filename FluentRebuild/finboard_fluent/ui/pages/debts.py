@@ -8,7 +8,13 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from ...core.models import Debt
 from ...core.service import FinanceService
 from ...i18n import t
-from ..dialogs import DebtDialog, DebtScheduleDialog, PayoffDialog
+from ..dialogs import (
+    DebtDialog,
+    DebtPaymentDialog,
+    DebtPaymentsDialog,
+    DebtScheduleDialog,
+    PayoffDialog,
+)
 from ..theme import colors
 from ..widgets import (
     Badge,
@@ -30,6 +36,8 @@ from .components import StatCard
 class DebtRow(QFrame):
     edit_requested = Signal(int)
     schedule_requested = Signal(object)
+    payment_requested = Signal(object)
+    history_requested = Signal(object)
 
     def __init__(
         self,
@@ -118,10 +126,16 @@ class DebtRow(QFrame):
 
         actions = QHBoxLayout()
         actions.setSpacing(6)
+        pay = ThemedButton(t("还款"), "primary")
+        pay.clicked.connect(lambda: self.payment_requested.emit(debt))
+        actions.addWidget(pay)
         if debt.is_loan:
             schedule = ThemedButton(t("还款计划"), "secondary")
             schedule.clicked.connect(lambda: self.schedule_requested.emit(debt))
             actions.addWidget(schedule)
+        history = IconButton("calendar", t("还款记录"), size=16)
+        history.clicked.connect(lambda: self.history_requested.emit(debt))
+        actions.addWidget(history)
         edit = IconButton("edit", t("设置负债信息"), size=16)
         edit.clicked.connect(lambda: self.edit_requested.emit(debt.account_id))
         actions.addWidget(edit)
@@ -202,6 +216,22 @@ class DebtsPage(Page):
     def _schedule(self, debt: Debt) -> None:
         DebtScheduleDialog(self.service, debt, parent=self.window).exec()
 
+    def _pay(self, debt: Debt) -> None:
+        account = self.service.repo.get_account(debt.account_id)
+        if account is None:
+            return
+        dialog = DebtPaymentDialog(self.service, account, debt, parent=self.window)
+        if dialog.exec():
+            self.refresh()
+
+    def _history(self, debt: Debt) -> None:
+        account = self.service.repo.get_account(debt.account_id)
+        if account is None:
+            return
+        dialog = DebtPaymentsDialog(self.service, account, parent=self.window)
+        if dialog.exec():
+            self.refresh()
+
     def refresh(self) -> None:
         debts = self.service.repo.debts()
         total = 0
@@ -255,6 +285,8 @@ class DebtsPage(Page):
             )
             row.edit_requested.connect(self._edit)
             row.schedule_requested.connect(self._schedule)
+            row.payment_requested.connect(self._pay)
+            row.history_requested.connect(self._history)
             self.rows.addWidget(row)
         self.card.setVisible(bool(debts))
         self.empty.setVisible(not debts)

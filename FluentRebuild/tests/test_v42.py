@@ -47,7 +47,7 @@ class V42Test(unittest.TestCase):
 
     def test_schema_v13_has_refunds_and_rules(self) -> None:
         self.assertEqual(
-            self.db.conn.execute("PRAGMA user_version").fetchone()[0], 15
+            self.db.conn.execute("PRAGMA user_version").fetchone()[0], 17
         )
         columns = {
             row["name"]

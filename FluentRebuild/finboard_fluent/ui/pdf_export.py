@@ -102,3 +102,74 @@ def export_pdf(repo: Repository, path: str | Path, month: str | None = None) -> 
 
 def pdf_filename() -> str:
     return f"FinBoard-报表-{today_iso()}.pdf"
+
+def export_range_pdf(
+    repo: Repository,
+    path: str | Path,
+    start_date: str,
+    end_date: str,
+    title: str = "FinBoard 年度报告",
+) -> Path:
+    """Export an arbitrary-range summary, used for annual reports."""
+    target = Path(path)
+    report = repo.range_report(start_date, end_date)
+    total = report.expense or 1
+    categories = "".join(
+        f"<tr><td width='50%'>{html.escape(item.name)}</td>"
+        f"<td width='28%' class='r'>{_money(item.amount)}</td>"
+        f"<td width='22%' class='r'>{item.amount / total * 100:.1f}%</td></tr>"
+        for item in report.breakdown[:15]
+    )
+    months = "".join(
+        f"<tr><td>{html.escape(point.month)}</td>"
+        f"<td class='r'>{_money(point.income)}</td>"
+        f"<td class='r'>{_money(point.expense)}</td>"
+        f"<td class='r'>{_money(point.net)}</td></tr>"
+        for point in report.trend
+    )
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    period = f"{report.start_date} 至 {report.end_date}"
+    document_html = f"""
+    <html><head><style>
+    body {{ font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif; color: #172033; }}
+    h1 {{ font-size: 22pt; margin: 0 0 2pt 0; color: #172033; }}
+    .sub {{ color: #667085; font-size: 9pt; margin-bottom: 14pt; }}
+    .cards {{ width: 100%; margin-bottom: 16pt; }}
+    .cards td {{ padding: 8pt; background: #F5F7FB; border: 1pt solid #E8EDF5; }}
+    .label {{ color: #667085; font-size: 8pt; }}
+    .value {{ font-size: 13pt; font-weight: bold; }}
+    h2 {{ font-size: 12pt; margin: 14pt 0 6pt 0; }}
+    table.data {{ width: 100%; border-collapse: collapse; font-size: 8.5pt; }}
+    table.data th {{ background: #EEF3FF; color: #26406F; text-align: left; padding: 4pt; border: 0.5pt solid #E8EDF5; }}
+    table.data td {{ border: 0.5pt solid #E8EDF5; padding: 3.5pt; }}
+    .r {{ text-align: right; }}
+    .muted {{ color: #667085; font-size: 8pt; }}
+    </style></head><body>
+    <h1>{html.escape(title)}</h1>
+    <div class='sub'>统计期间：{html.escape(period)} · 导出时间：{generated}</div>
+    <table class='cards'><tr>
+    <td><div class='label'>收入</div><div class='value'>{_money(report.income)}</div></td>
+    <td><div class='label'>支出</div><div class='value'>{_money(report.expense)}</div></td>
+    <td><div class='label'>结余</div><div class='value'>{_money(report.net)}</div></td>
+    <td><div class='label'>储蓄率</div><div class='value'>{report.savings_rate:.1f}%</div></td>
+    </tr></table>
+    <h2>支出分类</h2>
+    <table class='data' width='100%' cellspacing='0' cellpadding='4'>
+    <tr><th width='50%'>分类</th><th width='28%' class='r'>金额</th><th width='22%' class='r'>占比</th></tr>{categories}</table>
+    <h2>月度趋势</h2>
+    <table class='data' width='100%' cellspacing='0' cellpadding='4'>
+    <tr><th width='28%'>月份</th><th width='24%' class='r'>收入</th><th width='24%' class='r'>支出</th><th width='24%' class='r'>结余</th></tr>{months}</table>
+    <p class='muted'>本报表由 FinBoard 本机生成，按发生日期汇总，退款按净额冲减支出。</p>
+    </body></html>
+    """
+    writer = QPdfWriter(str(target))
+    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+    writer.setPageMargins(QMarginsF(14, 14, 14, 14), QPageLayout.Unit.Millimeter)
+    writer.setResolution(96)
+    writer.setTitle(title)
+    writer.setCreator("FinBoard")
+    document = QTextDocument()
+    document.setDefaultFont(QFont("Microsoft YaHei UI", 9))
+    document.setHtml(document_html)
+    document.print_(writer)
+    return target

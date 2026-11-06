@@ -52,7 +52,7 @@ class V40Test(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 )
             }
-        self.assertEqual(version, 15)
+        self.assertEqual(version, 17)
         self.assertIn("realized_profit", columns)
         self.assertIn("dividends", columns)
         self.assertIn("undo_log", tables)

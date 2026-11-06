@@ -8,12 +8,14 @@ from .category_manager import CategoryManagerDialog
 from .category_rules import CategoryRulesDialog
 from .csv_import import CsvImportDialog
 from .debt_dialog import DebtDialog
+from .debt_payment import DebtPaymentDialog, DebtPaymentsDialog
 from .debt_schedule_dialog import DebtScheduleDialog, PayoffDialog
 from .deposit_dialog import DepositDialog
 from .fixed_asset_dialog import FixedAssetDialog
 from .fixed_cost import FixedCostDialog
 from .goal_dialog import GoalDepositDialog, GoalDialog
 from .holdings_dialog import HoldingDialog, HoldingsDialog
+from .investment_trade import InvestmentTradesDialog, TradeDialog
 from .metadata_dialog import MetadataDialog
 from .planned_dialog import PlannedDialog
 from .receivable_dialog import ReceivableDialog
@@ -31,6 +33,8 @@ __all__ = [
     "CategoryRulesDialog",
     "CsvImportDialog",
     "DebtDialog",
+    "DebtPaymentDialog",
+    "DebtPaymentsDialog",
     "DebtScheduleDialog",
     "DepositDialog",
     "FixedAssetDialog",
@@ -39,6 +43,8 @@ __all__ = [
     "GoalDialog",
     "HoldingDialog",
     "HoldingsDialog",
+    "InvestmentTradesDialog",
+    "TradeDialog",
     "MetadataDialog",
     "PayoffDialog",
     "PlannedDialog",

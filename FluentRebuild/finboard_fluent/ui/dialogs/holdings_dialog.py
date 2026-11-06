@@ -35,6 +35,7 @@ from ..widgets import (
     set_error,
 )
 from .common import dialog_footer, dialog_header, error_label, form_label, root_layout, show_error
+from .investment_trade import InvestmentTradesDialog
 
 
 class HoldingDialog(QDialog):
@@ -406,8 +407,10 @@ class HoldingsDialog(QDialog):
         self.delete_button.clicked.connect(self._delete)
         self.cash_button = ThemedButton(t("调整现金"), "secondary", "wallet")
         self.cash_button.clicked.connect(self._adjust_cash)
+        self.trades_button = ThemedButton(t("投资流水"), "secondary", "list")
         self.sync_button = ThemedButton(t("按市值校准账户"), "soft", "refresh")
         self.sync_button.clicked.connect(self._sync)
+        self.trades_button.clicked.connect(self._open_trades)
         self.close_button = ThemedButton(t("关闭"), "secondary")
         self.close_button.clicked.connect(self.accept)
         actions.addWidget(self.add_button)
@@ -415,6 +418,7 @@ class HoldingsDialog(QDialog):
         actions.addWidget(self.delete_button)
         actions.addStretch(1)
         actions.addWidget(self.cash_button)
+        actions.addWidget(self.trades_button)
         actions.addWidget(self.sync_button)
         actions.addWidget(self.close_button)
         root.addLayout(actions)
@@ -466,6 +470,11 @@ class HoldingsDialog(QDialog):
         dialog = CashDialog(self.service, account, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
+
+    def _open_trades(self) -> None:
+        dialog = InvestmentTradesDialog(self.service, self.account, parent=self)
+        dialog.exec()
+        self.refresh()
 
     def _sync(self) -> None:
         try:

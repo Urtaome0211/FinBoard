@@ -181,6 +181,17 @@ class FinanceService(QObject):
         self.repo.delete_debt(account_id)
         self.changed.emit()
 
+    def debt_payments(self, account_id: int | None = None):
+        return self.repo.debt_payments(account_id)
+
+    def debt_payment_preview(self, account_id: int, amount: int) -> dict[str, int]:
+        return self.repo.debt_payment_preview(account_id, amount)
+
+    def record_debt_payment(self, account_id: int, **fields) -> dict[str, object]:
+        result = self.repo.record_debt_payment(account_id, **fields)
+        self.changed.emit()
+        return result
+
     def add_planned_transaction(self, **fields) -> int:
         planned_id = self.repo.add_planned_transaction(**fields)
         self.changed.emit()
@@ -501,6 +512,9 @@ class FinanceService(QObject):
     def daily_expense(self, month: str):
         return self.repo.daily_expense(month)
 
+    def range_report(self, start_date: str, end_date: str, dimension: str = "category"):
+        return self.repo.range_report(start_date, end_date, dimension)
+
     def add_holding(self, account_id: int, name: str, **fields) -> int:
         holding_id = self.repo.add_holding(account_id, name, **fields)
         self.changed.emit()
@@ -512,6 +526,17 @@ class FinanceService(QObject):
 
     def portfolio_xirr(self, account_id: int | None = None) -> float | None:
         return self.repo.portfolio_xirr(account_id)
+
+    def investment_trades(self, account_id: int | None = None):
+        return self.repo.investment_trades(account_id)
+
+    def investment_lots(self, account_id: int | None = None):
+        return self.repo.investment_lots(account_id)
+
+    def record_investment_trade(self, account_id: int, **fields) -> int:
+        trade_id = self.repo.record_investment_trade(account_id, **fields)
+        self.changed.emit()
+        return trade_id
 
     def delete_holding(self, holding_id: int) -> None:
         self.repo.delete_holding(holding_id)

@@ -44,13 +44,18 @@ from .models import (
     FALLBACK_CATEGORY,
     FIXED_ASSET_TYPE_META,
     Debt,
+    DebtPayment,
     FixedAsset,
     FixedAssetValuation,
     ForecastPoint,
     Holding,
     HoldingsSummary,
+    InvestmentDisposal,
+    InvestmentLot,
+    InvestmentTrade,
     KIND_LABELS,
     MonthStats,
+    RangeReport,
     NetWorth,
     NetWorthPoint,
     PayeeSpend,
@@ -559,11 +564,31 @@ class Repository:
         debt = self.get_debt(account_id)
         if debt is None or not debt.is_loan or debt.principal <= 0:
             return []
+        start = debt.start_date or today_iso()
+        if debt.outstanding <= 0:
+            return []
+        if debt.outstanding < debt.principal:
+            try:
+                first = date_cls.fromisoformat(start)
+                current = date_cls.fromisoformat(today_iso())
+                elapsed = max(
+                    0, (current.year - first.year) * 12 + current.month - first.month
+                )
+            except ValueError:
+                elapsed = 0
+            remaining = max(1, debt.term_months - elapsed)
+            return amortization(
+                debt.outstanding,
+                debt.annual_rate_bp,
+                remaining,
+                today_iso(),
+                debt.payment_method,
+            )
         return amortization(
             debt.principal,
             debt.annual_rate_bp,
             debt.term_months,
-            debt.start_date or today_iso(),
+            start,
             debt.payment_method,
         )
 
@@ -612,6 +637,195 @@ class Repository:
         return payoff_plan(
             items, extra_monthly=int(extra_monthly), method=method
         )
+
+    @staticmethod
+    def _debt_payment_split(debt: Debt, amount: int) -> tuple[int, int]:
+        """Split a repayment into principal and interest in cents."""
+        amount = int(amount)
+        if amount <= 0:
+            raise ValueError("还款金额必须大于 0")
+        outstanding = max(0, debt.outstanding)
+        if outstanding <= 0:
+            raise ValueError("这笔负债已经还清")
+        if debt.is_credit:
+            if amount > outstanding:
+                raise ValueError("还款金额不能超过剩余欠款")
+            return amount, 0
+        monthly_interest = (
+            outstanding * debt.annual_rate_bp + 60_000
+        ) // 120_000
+        if amount <= monthly_interest:
+            return 0, amount
+        principal = amount - monthly_interest
+        if principal > outstanding:
+            principal = outstanding
+            interest = amount - principal
+            if interest > monthly_interest:
+                raise ValueError("还款金额超过剩余本金与本期利息")
+            return principal, interest
+        return principal, monthly_interest
+
+    def debt_payment_preview(self, account_id: int, amount: int) -> dict[str, int]:
+        debt = self.get_debt(account_id)
+        if debt is None:
+            raise ValueError("请先设置负债信息")
+        principal, interest = self._debt_payment_split(debt, amount)
+        return {
+            "amount": int(amount),
+            "principal": principal,
+            "interest": interest,
+            "outstanding": debt.outstanding,
+            "monthly_interest": (
+                (debt.outstanding * debt.annual_rate_bp + 60_000) // 120_000
+                if debt.is_loan
+                else 0
+            ),
+        }
+
+    def record_debt_payment(
+        self,
+        account_id: int,
+        *,
+        amount: int,
+        source_account_id: int,
+        paid_on: str | None = None,
+        note: str = "",
+    ) -> dict[str, object]:
+        """Record a repayment, creating the principal transfer and interest expense."""
+        debt = self.get_debt(account_id)
+        if debt is None:
+            raise ValueError("请先设置负债信息")
+        account = self.get_account(account_id, include_archived=True)
+        source = self.get_account(source_account_id, include_archived=True)
+        if source.type not in ("cash", "debit", "investment"):
+            raise ValueError("还款来源必须是现金、储蓄或投资账户")
+        if source.id == account.id:
+            raise ValueError("还款来源不能是负债账户本身")
+        if source.archived:
+            raise ValueError("还款来源账户已归档")
+        if source.currency != account.currency:
+            raise ValueError("还款来源与负债账户币种不一致")
+        principal, interest = self._debt_payment_split(debt, amount)
+        if source.cash_balance < int(amount):
+            raise ValueError("还款来源账户余额不足")
+        day = normalize_day(paid_on) if paid_on else today_iso()
+        text = str(note or "").strip()[:200]
+        transfer_id = None
+        interest_id = None
+        if principal > 0:
+            transfer_id = self.add_transaction(
+                date=day,
+                kind="transfer",
+                amount=principal,
+                account_id=source.id,
+                to_account_id=account.id,
+                payee=account.name,
+                note=text or "负债还款",
+                currency=source.currency,
+                account_amount=principal,
+                to_amount=principal,
+                fee_waived=True,
+                fee_included=True,
+            )
+        if interest > 0:
+            category = self.conn.execute(
+                "SELECT id FROM categories WHERE kind = 'expense' AND name = '利息支出'"
+            ).fetchone()
+            if category is None:
+                cursor = self.conn.execute(
+                    "INSERT INTO categories (name, kind, color, created_at)"
+                    " VALUES ('利息支出', 'expense', '#E5484D', ?)",
+                    (now_iso(),),
+                )
+                category_id = int(cursor.lastrowid)
+            else:
+                category_id = int(category["id"])
+            interest_id = self.add_transaction(
+                date=day,
+                kind="expense",
+                amount=interest,
+                account_id=source.id,
+                category_id=category_id,
+                payee=account.name,
+                note=text or "负债利息",
+                currency=source.currency,
+            )
+        cursor = self.conn.execute(
+            "INSERT INTO debt_payments"
+            " (account_id, paid_on, amount, principal, interest, transfer_id,"
+            "  interest_transaction_id, note, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                account_id,
+                day,
+                int(amount),
+                principal,
+                interest,
+                transfer_id,
+                interest_id,
+                text,
+                now_iso(),
+            ),
+        )
+        self.conn.commit()
+        latest = self.get_debt(account_id)
+        return {
+            "id": int(cursor.lastrowid),
+            "account_id": account_id,
+            "paid_on": day,
+            "amount": int(amount),
+            "principal": principal,
+            "interest": interest,
+            "transfer_id": transfer_id,
+            "interest_transaction_id": interest_id,
+            "outstanding_after": latest.outstanding if latest else 0,
+        }
+
+    def _debt_payment(self, row: sqlite3.Row) -> DebtPayment:
+        return DebtPayment(
+            id=int(row["id"]),
+            account_id=int(row["account_id"]),
+            paid_on=row["paid_on"],
+            amount=int(row["amount"]),
+            principal=int(row["principal"]),
+            interest=int(row["interest"]),
+            transfer_id=row["transfer_id"],
+            interest_transaction_id=row["interest_transaction_id"],
+            note=row["note"] or "",
+            created_at=row["created_at"] or "",
+            account_name=row["account_name"] or "",
+            currency=row["currency"] or "CNY",
+        )
+
+    def debt_payments(self, account_id: int | None = None) -> list[DebtPayment]:
+        if account_id is None:
+            rows = self.conn.execute(
+                "SELECT p.*, a.name AS account_name, a.currency AS currency"
+                " FROM debt_payments p JOIN accounts a ON a.id = p.account_id"
+                " ORDER BY p.paid_on DESC, p.id DESC"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT p.*, a.name AS account_name, a.currency AS currency"
+                " FROM debt_payments p JOIN accounts a ON a.id = p.account_id"
+                " WHERE p.account_id = ? ORDER BY p.paid_on DESC, p.id DESC",
+                (account_id,),
+            ).fetchall()
+        return [self._debt_payment(row) for row in rows]
+
+    def debt_paid_principal(self, account_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(principal), 0) FROM debt_payments WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+        return int(row[0])
+
+    def debt_paid_interest(self, account_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(interest), 0) FROM debt_payments WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+        return int(row[0])
 
     # ------------------------------------------------------------- planned
     @staticmethod
@@ -1763,6 +1977,333 @@ class Repository:
             ).fetchone()[0]
         )
 
+    # -------------------------------------------------------- investment lots
+    @staticmethod
+    def _investment_trade(row: sqlite3.Row) -> InvestmentTrade:
+        return InvestmentTrade(
+            id=int(row["id"]),
+            account_id=int(row["account_id"]),
+            symbol=row["symbol"] or "",
+            name=row["name"],
+            kind=row["kind"],
+            trade_date=row["trade_date"],
+            quantity_units=int(row["quantity_units"]),
+            price=int(row["price"]),
+            fee=int(row["fee"]),
+            amount=int(row["amount"]),
+            currency=row["currency"] or "CNY",
+            note=row["note"] or "",
+            created_at=row["created_at"] or "",
+            account_name=row["account_name"] if "account_name" in row.keys() else "",
+        )
+
+    @staticmethod
+    def _investment_lot(row: sqlite3.Row) -> InvestmentLot:
+        return InvestmentLot(
+            id=int(row["id"]),
+            trade_id=int(row["trade_id"]),
+            account_id=int(row["account_id"]),
+            symbol=row["symbol"] or "",
+            name=row["name"],
+            acquired_date=row["acquired_date"],
+            quantity_units=int(row["quantity_units"]),
+            remaining_units=int(row["remaining_units"]),
+            unit_cost=int(row["unit_cost"]),
+            currency=row["currency"] or "CNY",
+            created_at=row["created_at"] or "",
+        )
+
+    @staticmethod
+    def _investment_disposal(row: sqlite3.Row) -> InvestmentDisposal:
+        return InvestmentDisposal(
+            id=int(row["id"]),
+            sell_trade_id=int(row["sell_trade_id"]),
+            lot_id=int(row["lot_id"]),
+            quantity_units=int(row["quantity_units"]),
+            cost=int(row["cost"]),
+            proceeds=int(row["proceeds"]),
+            realized=int(row["realized"]),
+            created_at=row["created_at"] or "",
+        )
+
+    def investment_trades(
+        self, account_id: int | None = None, *, limit: int | None = None
+    ) -> list[InvestmentTrade]:
+        sql = (
+            "SELECT t.id, t.account_id, t.symbol, t.name, t.kind, t.trade_date,"
+            " t.quantity_units, t.price, t.fee, t.amount, t.currency, t.note,"
+            " t.created_at, a.name AS account_name"
+            " FROM investment_trades t JOIN accounts a ON a.id = t.account_id"
+        )
+        params: list[object] = []
+        if account_id is not None:
+            sql += " WHERE t.account_id = ?"
+            params.append(int(account_id))
+        sql += " ORDER BY t.trade_date DESC, t.id DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(max(1, int(limit)))
+        return [self._investment_trade(row) for row in self.conn.execute(sql, tuple(params))]
+
+    def investment_lots(
+        self, account_id: int | None = None, *, trade_id: int | None = None
+    ) -> list[InvestmentLot]:
+        sql = "SELECT * FROM investment_lots"
+        clauses: list[str] = []
+        params: list[object] = []
+        if account_id is not None:
+            clauses.append("account_id = ?")
+            params.append(int(account_id))
+        if trade_id is not None:
+            clauses.append("trade_id = ?")
+            params.append(int(trade_id))
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY acquired_date, id"
+        return [self._investment_lot(row) for row in self.conn.execute(sql, tuple(params))]
+
+    def investment_disposals(
+        self, *, sell_trade_id: int | None = None
+    ) -> list[InvestmentDisposal]:
+        sql = "SELECT * FROM investment_disposals"
+        params: tuple[object, ...] = ()
+        if sell_trade_id is not None:
+            sql += " WHERE sell_trade_id = ?"
+            params = (int(sell_trade_id),)
+        sql += " ORDER BY id"
+        return [self._investment_disposal(row) for row in self.conn.execute(sql, params)]
+
+    def _investment_account(self, account_id: int) -> Account:
+        account = self.get_account(account_id, include_archived=True)
+        if account.type != "investment":
+            raise ValueError("只有投资理财账户可以记录投资流水")
+        return account
+
+    @staticmethod
+    def _clean_symbol(symbol: str) -> str:
+        return str(symbol or "").strip().upper()[:20]
+
+    def _holding_row_for(
+        self, conn: sqlite3.Connection, account_id: int, symbol: str, name: str
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT * FROM holdings WHERE account_id = ? AND symbol = ? AND name = ?",
+            (int(account_id), symbol, name),
+        ).fetchone()
+
+    def _insert_holding(
+        self,
+        conn: sqlite3.Connection,
+        account_id: int,
+        symbol: str,
+        name: str,
+        *,
+        quantity_units: int,
+        cost_price: int,
+        price: int,
+    ) -> sqlite3.Row:
+        conn.execute(
+            "INSERT INTO holdings (account_id, symbol, name, quantity_units,"
+            " cost_price, price, note, realized_profit, dividends, asset_class,"
+            " region, created_at) VALUES (?, ?, ?, ?, ?, ?, '', 0, 0, '', '', ?)",
+            (
+                int(account_id), symbol, name, int(quantity_units),
+                int(cost_price), int(price), now_iso(),
+            ),
+        )
+        row = self._holding_row_for(conn, account_id, symbol, name)
+        assert row is not None
+        return row
+
+    def _write_holding_values(
+        self,
+        conn: sqlite3.Connection,
+        holding_id: int,
+        *,
+        quantity_units: int,
+        cost_price: int,
+        price: int,
+        realized_profit: int,
+        dividends: int,
+    ) -> None:
+        conn.execute(
+            "UPDATE holdings SET quantity_units = ?, cost_price = ?, price = ?,"
+            " realized_profit = ?, dividends = ?, updated_at = ? WHERE id = ?",
+            (
+                int(quantity_units),
+                int(cost_price),
+                int(price),
+                int(realized_profit),
+                int(dividends),
+                now_iso(),
+                int(holding_id),
+            ),
+        )
+
+    def record_investment_trade(
+        self,
+        account_id: int,
+        *,
+        kind: str,
+        symbol: str,
+        name: str,
+        trade_date: str,
+        quantity_units: int = 0,
+        price: int = 0,
+        fee: int = 0,
+        amount: int = 0,
+        note: str = "",
+    ) -> int:
+        """Record a buy/sell/dividend and keep the aggregate holding in sync."""
+        account = self._investment_account(account_id)
+        kind = str(kind or "").strip().lower()
+        if kind not in ("buy", "sell", "dividend"):
+            raise ValueError("投资流水类型无效")
+        symbol = self._clean_symbol(symbol)
+        name = self._clean_name(name, "持仓名称", 60)
+        trade_date = normalize_day(trade_date)
+        quantity_units = int(quantity_units or 0)
+        price = int(price or 0)
+        fee = int(fee or 0)
+        amount = int(amount or 0)
+        if kind in ("buy", "sell"):
+            if quantity_units <= 0 or quantity_units > MAX_QUANTITY_UNITS:
+                raise ValueError("成交数量无效")
+            if price < 0 or price > MAX_AMOUNT_CENTS:
+                raise ValueError("成交价无效")
+            if fee < 0 or fee > MAX_AMOUNT_CENTS:
+                raise ValueError("手续费无效")
+            amount = 0
+        else:
+            if amount <= 0 or amount > MAX_AMOUNT_CENTS:
+                raise ValueError("分红金额无效")
+            quantity_units = 0
+            price = 0
+            fee = 0
+        gross = (quantity_units * price + 500_000) // 1_000_000
+        if kind == "sell" and fee > gross:
+            raise ValueError("手续费不能超过成交金额")
+        with self.db.transaction() as conn:
+            trade = conn.execute(
+                "INSERT INTO investment_trades (account_id, symbol, name, kind,"
+                " trade_date, quantity_units, price, fee, amount, currency, note,"
+                " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    int(account_id), symbol, name, kind, trade_date,
+                    quantity_units, price, fee, amount, account.currency,
+                    str(note or "").strip()[:200], now_iso(),
+                ),
+            )
+            trade_id = int(trade.lastrowid)
+            holding = self._holding_row_for(conn, account_id, symbol, name)
+            old_qty = int(holding["quantity_units"]) if holding is not None else 0
+            old_cost = (
+                (old_qty * int(holding["cost_price"]) + 500_000) // 1_000_000
+                if holding is not None else 0
+            )
+            realized = int(holding["realized_profit"] or 0) if holding is not None else 0
+            dividends = int(holding["dividends"] or 0) if holding is not None else 0
+            if kind == "buy":
+                total_cost = gross + fee
+                unit_cost = (
+                    (total_cost * 1_000_000 + quantity_units // 2) // quantity_units
+                    if quantity_units
+                    else 0
+                )
+                conn.execute(
+                    "INSERT INTO investment_lots (trade_id, account_id, symbol, name,"
+                    " acquired_date, quantity_units, remaining_units, unit_cost,"
+                    " currency, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        trade_id, int(account_id), symbol, name, trade_date,
+                        quantity_units, quantity_units, unit_cost, account.currency,
+                        now_iso(),
+                    ),
+                )
+                if holding is None:
+                    self._insert_holding(
+                        conn, account_id, symbol, name,
+                        quantity_units=quantity_units, cost_price=unit_cost, price=price,
+                    )
+                    return trade_id
+                new_qty = old_qty + quantity_units
+                new_cost = old_cost + total_cost
+                new_price = int(holding["price"]) or price
+            elif kind == "sell":
+                if holding is None:
+                    raise ValueError("当前没有可卖出的持仓")
+                if quantity_units > old_qty:
+                    raise ValueError("卖出数量超过当前持仓")
+                open_lots = [
+                    row
+                    for row in conn.execute(
+                        "SELECT * FROM investment_lots WHERE account_id = ? AND"
+                        " symbol = ? AND name = ? AND remaining_units > 0"
+                        " ORDER BY acquired_date, id",
+                        (int(account_id), symbol, name),
+                    )
+                ]
+                available = sum(int(row["remaining_units"]) for row in open_lots)
+                if quantity_units > available:
+                    raise ValueError("卖出数量超过可用的逐笔持仓")
+                left = quantity_units
+                cost_total = 0
+                proceeds = gross - fee
+                proceeds_left = proceeds
+                for index, lot in enumerate(open_lots):
+                    if left <= 0:
+                        break
+                    take = min(left, int(lot["remaining_units"]))
+                    lot_cost = (take * int(lot["unit_cost"]) + 500_000) // 1_000_000
+                    if index == len(open_lots) - 1 or take == left:
+                        lot_proceeds = proceeds_left
+                    else:
+                        lot_proceeds = (proceeds * take + quantity_units // 2) // quantity_units
+                        lot_proceeds = min(lot_proceeds, proceeds_left)
+                    proceeds_left -= lot_proceeds
+                    conn.execute(
+                        "UPDATE investment_lots SET remaining_units = remaining_units - ?"
+                        " WHERE id = ?",
+                        (take, int(lot["id"])),
+                    )
+                    conn.execute(
+                        "INSERT INTO investment_disposals (sell_trade_id, lot_id,"
+                        " quantity_units, cost, proceeds, realized, created_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            trade_id, int(lot["id"]), take, lot_cost, lot_proceeds,
+                            lot_proceeds - lot_cost, now_iso(),
+                        ),
+                    )
+                    cost_total += lot_cost
+                    left -= take
+                if left > 0:
+                    raise ValueError("卖出数量超过可用的逐笔持仓")
+                new_qty = old_qty - quantity_units
+                new_cost = max(0, old_cost - cost_total)
+                realized += proceeds - cost_total
+                new_price = price or int(holding["price"])
+            else:
+                if holding is None:
+                    return trade_id
+                new_qty = old_qty
+                new_cost = old_cost
+                dividends += amount
+                new_price = int(holding["price"])
+            new_cost_price = (
+                (new_cost * 1_000_000 + new_qty // 2) // new_qty if new_qty else 0
+            )
+            self._write_holding_values(
+                conn,
+                int(holding["id"]),
+                quantity_units=new_qty,
+                cost_price=new_cost_price,
+                price=new_price,
+                realized_profit=realized,
+                dividends=dividends,
+            )
+            return trade_id
+
     # ------------------------------------------------------------ fixed assets
     @staticmethod
     def _fixed_asset(row: sqlite3.Row) -> FixedAsset:
@@ -2552,6 +3093,12 @@ class Repository:
             start, end = month_bounds(filters.month)
             clauses.append("t.date >= ? AND t.date < ?")
             params.extend([start, end])
+        if filters.start_date:
+            clauses.append("t.date >= ?")
+            params.append(filters.start_date)
+        if filters.end_date:
+            clauses.append("t.date <= ?")
+            params.append(filters.end_date)
         if filters.kind:
             clauses.append("t.kind = ?")
             params.append(filters.kind)
@@ -3745,6 +4292,173 @@ class Repository:
             month=month, income=totals["income"], expense=totals["expense"]
         )
 
+    def transactions_between(self, start_date: str, end_date: str) -> list[Transaction]:
+        """All transactions in an inclusive ISO date range, hydrated."""
+        start = normalize_day(start_date)
+        end = normalize_day(end_date)
+        if start > end:
+            raise ValueError("开始日期不能晚于结束日期")
+        return self.transactions(
+            TransactionFilter(start_date=start, end_date=end, limit=100_000)
+        )
+
+    def _range_totals(self, start: str, end: str) -> tuple[int, int]:
+        totals = {"income": 0, "expense": 0}
+        for txn in self.transactions_between(start, end):
+            if txn.kind == "transfer":
+                if txn.fee > 0:
+                    totals["expense"] += self._to_base(
+                        txn.fee, txn.account_currency, txn.date
+                    )
+                continue
+            value = self._to_base(txn.amount, txn.currency, txn.date)
+            if txn.kind == "income" and txn.refund_of_id is not None:
+                totals["expense"] -= value
+            else:
+                totals[txn.kind] += value
+        return totals["income"], totals["expense"]
+
+    def range_report(
+        self, start_date: str, end_date: str, dimension: str = "category"
+    ) -> RangeReport:
+        """Totals, period comparisons and a dimension breakdown for a range."""
+        if dimension not in ("category", "tag", "account"):
+            raise ValueError("不支持的报表维度")
+        start = normalize_day(start_date)
+        end = normalize_day(end_date)
+        if start > end:
+            raise ValueError("开始日期不能晚于结束日期")
+        first = date_cls.fromisoformat(start)
+        last = date_cls.fromisoformat(end)
+        span = (last - first).days + 1
+
+        rows = self.transactions_between(start, end)
+        income = 0
+        expense = 0
+        monthly: dict[str, dict[str, int]] = {}
+        buckets: dict[tuple[object, str, str], int] = {}
+        palette = ("#3D6DF2", "#12B76A", "#F79009", "#7A5AF8", "#E5484D", "#06AED4")
+        refund_cache: dict[int, Transaction] = {}
+
+        def add_bucket(key: object, name: str, color: str, amount: int) -> None:
+            if not amount:
+                return
+            bucket_key = (key, name, color)
+            buckets[bucket_key] = buckets.get(bucket_key, 0) + amount
+
+        def original(txn: Transaction) -> Transaction | None:
+            if not txn.refund_of_id:
+                return None
+            if txn.refund_of_id not in refund_cache:
+                try:
+                    refund_cache[txn.refund_of_id] = self.get_transaction(txn.refund_of_id)
+                except ValueError:
+                    return None
+            return refund_cache[txn.refund_of_id]
+
+        def apply_month(txn: Transaction, kind: str, value: int) -> None:
+            month = txn.date[:7]
+            slot = monthly.setdefault(month, {"income": 0, "expense": 0})
+            slot[kind] += value
+
+        def apply_breakdown(txn: Transaction, amount: int) -> None:
+            if dimension == "category":
+                if txn.splits:
+                    for split in txn.splits:
+                        share = self._to_base(split.amount, txn.currency, txn.date)
+                        add_bucket(
+                            split.category_id,
+                            split.category_name,
+                            split.category_color,
+                            share if amount > 0 else -share,
+                        )
+                else:
+                    add_bucket(
+                        txn.category_id or 0,
+                        txn.category_name or "未分类",
+                        txn.category_color or palette[0],
+                        amount,
+                    )
+            elif dimension == "tag":
+                if txn.tags:
+                    for tag in txn.tags:
+                        add_bucket(tag.id, tag.name, tag.color or palette[1], amount)
+                elif amount > 0:
+                    add_bucket(0, "未标签", palette[5], amount)
+            else:
+                add_bucket(
+                    txn.account_id,
+                    txn.account_name,
+                    palette[txn.account_id % len(palette)],
+                    amount,
+                )
+
+        for txn in rows:
+            if txn.kind == "transfer":
+                if txn.fee > 0:
+                    fee = self._to_base(txn.fee, txn.account_currency, txn.date)
+                    expense += fee
+                    apply_month(txn, "expense", fee)
+                    add_bucket(-1, "提现手续费", "#E5484D", fee)
+                continue
+            value = self._to_base(txn.amount, txn.currency, txn.date)
+            if txn.kind == "income" and txn.refund_of_id is not None:
+                expense -= value
+                apply_month(txn, "expense", -value)
+                parent = original(txn)
+                if parent is not None:
+                    apply_breakdown(parent, -value)
+                else:
+                    add_bucket(-2, "退款", "#667085", -value)
+            else:
+                if txn.kind == "income":
+                    income += value
+                    apply_month(txn, "income", value)
+                else:
+                    expense += value
+                    apply_month(txn, "expense", value)
+                    apply_breakdown(txn, value)
+
+        previous_end = first - timedelta(days=1)
+        previous_start = previous_end - timedelta(days=span - 1)
+        try:
+            year_start = first.replace(year=first.year - 1)
+        except ValueError:
+            year_start = first.replace(year=first.year - 1, day=28)
+        try:
+            year_end = last.replace(year=last.year - 1)
+        except ValueError:
+            year_end = last.replace(year=last.year - 1, day=28)
+        previous_income, previous_expense = self._range_totals(
+            previous_start.isoformat(), previous_end.isoformat()
+        )
+        year_income, year_expense = self._range_totals(
+            year_start.isoformat(), year_end.isoformat()
+        )
+
+        breakdown = [
+            CategorySpend(category_id=int(key), name=name, color=color, amount=amount)
+            for (key, name, color), amount in buckets.items()
+            if amount > 0
+        ]
+        breakdown.sort(key=lambda item: (-item.amount, item.name))
+        trend = tuple(
+            MonthStats(month=month, income=values["income"], expense=values["expense"])
+            for month, values in sorted(monthly.items())
+        )
+        return RangeReport(
+            start_date=start,
+            end_date=end,
+            income=income,
+            expense=expense,
+            previous_income=previous_income,
+            previous_expense=previous_expense,
+            year_income=year_income,
+            year_expense=year_expense,
+            breakdown=tuple(breakdown),
+            trend=trend,
+        )
+
     def net_worth(self) -> NetWorth:
         accounts = self.accounts(include_archived=False)
         account_assets = 0
@@ -4554,6 +5268,7 @@ class Repository:
             conn.execute("DELETE FROM term_deposits")
             conn.execute("DELETE FROM planned_transactions")
             conn.execute("DELETE FROM receivables")
+            conn.execute("DELETE FROM debt_payments")
             conn.execute("DELETE FROM debts")
             conn.execute("DELETE FROM fixed_asset_valuations")
             conn.execute("DELETE FROM category_rules")
@@ -4566,7 +5281,7 @@ class Repository:
                 "DELETE FROM sqlite_sequence WHERE name IN"
                 " ('transactions','budgets','accounts','categories',"
                 "  'category_rules','undo_log','term_deposits',"
-                "  'planned_transactions','receivables','debts',"
+                "  'planned_transactions','receivables','debt_payments','debts',"
                 "  'fixed_asset_valuations')"
             )
             if seed_defaults:

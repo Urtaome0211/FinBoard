@@ -105,12 +105,14 @@ class MainWindow(FluentWindow):
         *,
         language: str | None = None,
         theme: str | None = None,
+        auto_refresh_rates: bool = True,
     ) -> None:
         super().__init__()
         self.service = service
         self.settings = settings or QSettings("FinBoard", "FinBoard")
         self.current_key = "dashboard"
         self._rate_thread: _RateFetchThread | None = None
+        self._auto_refresh_rates_enabled = auto_refresh_rates
         self._quitting = False
         self._tray: QSystemTrayIcon | None = None
         self._tray_menu: QMenu | None = None
@@ -274,7 +276,7 @@ class MainWindow(FluentWindow):
             self.currency_chip.setText(self.service.currency)
 
     def _auto_refresh_rates(self) -> None:
-        if self._quitting:
+        if self._quitting or not self._auto_refresh_rates_enabled:
             return
         if not self.service.rate_store.should_refresh():
             return
@@ -613,6 +615,15 @@ class MainWindow(FluentWindow):
                     5000,
                 )
             return
-        if self._rate_thread is not None and self._rate_thread.isRunning():
-            self._rate_thread.wait(10_000)
+        self.shutdown()
         super().closeEvent(event)
+
+    def shutdown(self) -> None:
+        """Stop background work before the application exits."""
+        self._quitting = True
+        thread = self._rate_thread
+        if thread is not None:
+            if thread.isRunning():
+                thread.wait(15_000)
+            thread.deleteLater()
+            self._rate_thread = None

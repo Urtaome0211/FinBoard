@@ -10,6 +10,7 @@ from .database import Database, SCHEMA_VERSION
 
 BACKUP_PREFIX = "finboard-"
 BACKUP_SUFFIX = ".db"
+_INDEX_MARKERS = ("index", "索引")
 
 
 def backup_dir(db_path: str | Path) -> Path:
@@ -85,6 +86,39 @@ def quick_check(db: Database) -> tuple[bool, str]:
     if foreign:
         return False, f"发现 {len(foreign)} 处外键异常"
     return True, ""
+
+
+def looks_like_index_problem(detail: str) -> bool:
+    """Return True when quick_check reports a broken index b-tree."""
+    text = str(detail).lower()
+    return any(marker in text for marker in _INDEX_MARKERS)
+
+
+def repair_indexes(db: Database) -> tuple[bool, str]:
+    """Rebuild all indexes after an index-only integrity failure.
+
+    The function is deliberately conservative: a database that is damaged
+    outside its indexes is returned untouched, so the caller can offer a
+    backup restore instead of hiding real corruption.
+    """
+    ok, detail = quick_check(db)
+    if ok:
+        return True, ""
+    if not looks_like_index_problem(detail):
+        return False, detail
+    try:
+        create_backup(db, keep=20, reason="before-reindex")
+    except Exception:
+        pass
+    try:
+        db.conn.execute("REINDEX")
+        db.conn.commit()
+    except sqlite3.Error as exc:
+        return False, str(exc)
+    ok, detail = quick_check(db)
+    if not ok:
+        return False, detail
+    return True, "已重建索引"
 
 
 def restore_backup(db: Database, source: str | Path) -> None:

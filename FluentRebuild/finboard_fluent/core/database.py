@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 17
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -451,6 +451,101 @@ CREATE INDEX IF NOT EXISTS idx_receivables_status
 """
 
 
+SCHEMA_V16 = """
+CREATE TABLE IF NOT EXISTS investment_trades (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    symbol         TEXT    NOT NULL DEFAULT '',
+    name           TEXT    NOT NULL,
+    kind           TEXT    NOT NULL CHECK (kind IN ('buy','sell','dividend')),
+    trade_date     TEXT    NOT NULL,
+    quantity_units INTEGER NOT NULL DEFAULT 0 CHECK (quantity_units >= 0),
+    price          INTEGER NOT NULL DEFAULT 0 CHECK (price >= 0),
+    fee            INTEGER NOT NULL DEFAULT 0 CHECK (fee >= 0),
+    amount         INTEGER NOT NULL DEFAULT 0 CHECK (amount >= 0),
+    currency       TEXT    NOT NULL DEFAULT 'CNY',
+    note           TEXT    NOT NULL DEFAULT '',
+    created_at     TEXT    NOT NULL,
+    CHECK ((kind IN ('buy','sell') AND quantity_units > 0)
+           OR (kind = 'dividend' AND amount > 0))
+);
+
+CREATE INDEX IF NOT EXISTS idx_investment_trades_account
+    ON investment_trades(account_id, trade_date, id);
+CREATE INDEX IF NOT EXISTS idx_investment_trades_symbol
+    ON investment_trades(account_id, symbol, name);
+
+CREATE TABLE IF NOT EXISTS investment_lots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id        INTEGER NOT NULL REFERENCES investment_trades(id) ON DELETE CASCADE,
+    account_id      INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    symbol          TEXT    NOT NULL DEFAULT '',
+    name            TEXT    NOT NULL,
+    acquired_date   TEXT    NOT NULL,
+    quantity_units  INTEGER NOT NULL CHECK (quantity_units > 0),
+    remaining_units INTEGER NOT NULL CHECK (remaining_units >= 0),
+    unit_cost       INTEGER NOT NULL CHECK (unit_cost >= 0),
+    currency        TEXT    NOT NULL DEFAULT 'CNY',
+    created_at      TEXT    NOT NULL,
+    CHECK (remaining_units <= quantity_units)
+);
+
+CREATE INDEX IF NOT EXISTS idx_investment_lots_open
+    ON investment_lots(account_id, symbol, name, remaining_units);
+
+CREATE TABLE IF NOT EXISTS investment_disposals (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    sell_trade_id  INTEGER NOT NULL REFERENCES investment_trades(id) ON DELETE CASCADE,
+    lot_id         INTEGER NOT NULL REFERENCES investment_lots(id) ON DELETE CASCADE,
+    quantity_units INTEGER NOT NULL CHECK (quantity_units > 0),
+    cost           INTEGER NOT NULL CHECK (cost >= 0),
+    proceeds       INTEGER NOT NULL,
+    realized       INTEGER NOT NULL,
+    created_at     TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_investment_disposals_trade
+    ON investment_disposals(sell_trade_id);
+
+INSERT INTO investment_trades
+    (account_id, symbol, name, kind, trade_date, quantity_units, price, fee,
+     amount, currency, note, created_at)
+SELECT h.account_id, h.symbol, h.name, 'buy',
+       substr(h.created_at, 1, 10), h.quantity_units, h.cost_price, 0, 0,
+       a.currency, '从持仓快照迁移', h.created_at
+FROM holdings h JOIN accounts a ON a.id = h.account_id
+WHERE h.quantity_units > 0;
+
+INSERT INTO investment_lots
+    (trade_id, account_id, symbol, name, acquired_date, quantity_units,
+     remaining_units, unit_cost, currency, created_at)
+SELECT t.id, t.account_id, t.symbol, t.name, t.trade_date,
+       t.quantity_units, t.quantity_units, t.price, t.currency, t.created_at
+FROM investment_trades t
+WHERE t.note = '从持仓快照迁移';
+"""
+
+
+SCHEMA_V17 = """
+CREATE TABLE IF NOT EXISTS debt_payments (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id              INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    paid_on                 TEXT    NOT NULL,
+    amount                  INTEGER NOT NULL CHECK (amount > 0),
+    principal               INTEGER NOT NULL DEFAULT 0 CHECK (principal >= 0),
+    interest                INTEGER NOT NULL DEFAULT 0 CHECK (interest >= 0),
+    transfer_id             INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+    interest_transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+    note                    TEXT    NOT NULL DEFAULT '',
+    created_at              TEXT    NOT NULL,
+    CHECK (principal + interest = amount)
+);
+
+CREATE INDEX IF NOT EXISTS idx_debt_payments_account
+    ON debt_payments(account_id, paid_on, id);
+"""
+
+
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
 
@@ -532,6 +627,12 @@ class Database:
         if version < 15:
             conn.executescript(SCHEMA_V15)
             version = 15
+        if version < 16:
+            conn.executescript(SCHEMA_V16)
+            version = 16
+        if version < 17:
+            conn.executescript(SCHEMA_V17)
+            version = 17
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

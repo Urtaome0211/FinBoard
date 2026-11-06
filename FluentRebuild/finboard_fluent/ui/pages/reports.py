@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QComboBox,
+    QDateEdit,
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMenu,
     QVBoxLayout,
@@ -22,7 +26,7 @@ from ...core.exporters import export_excel, report_filename
 from ...core.models import CategorySpend, PayeeSpend
 from ...i18n import category_display, t
 from ..charts import CategoryBars, DonutChart, SpendingCalendar, TrendChart
-from ..pdf_export import export_pdf, pdf_filename
+from ..pdf_export import export_pdf, export_range_pdf, pdf_filename
 from ..rows import ElidedLabel
 from ..theme import colors
 from ..widgets import (
@@ -97,6 +101,8 @@ class ReportsPage(Page):
         for card in (self.income_card, self.expense_card, self.net_card, self.rate_card):
             stats.addWidget(card, 1)
         self.body.addLayout(stats)
+
+        self._build_range_card()
 
         self.portfolio_card = Card(padding=16, spacing=8)
         self.portfolio_card.add_header(
@@ -248,6 +254,225 @@ class ReportsPage(Page):
         self.tag_card.setVisible(bool(tags))
         self.tag_bars.set_data(tags[:8], total=sum(item.amount for item in tags))
         self._refresh_payees(month)
+        self._apply_range()
+
+    def _build_range_card(self) -> None:
+        self.range_card = Card(padding=16, spacing=10)
+        self.range_card.add_header(
+            "区间分析", "任意日期范围、同比环比与分类/标签/账户维度"
+        )
+        controls = QHBoxLayout()
+        controls.setSpacing(8)
+        controls.addWidget(QLabel(t("从")))
+        self.range_start = QDateEdit(QDate(QDate.currentDate().year(), QDate.currentDate().month(), 1))
+        self.range_start.setDisplayFormat("yyyy-MM-dd")
+        self.range_start.setCalendarPopup(True)
+        controls.addWidget(self.range_start)
+        controls.addWidget(QLabel(t("到")))
+        self.range_end = QDateEdit(QDate.currentDate())
+        self.range_end.setDisplayFormat("yyyy-MM-dd")
+        self.range_end.setCalendarPopup(True)
+        controls.addWidget(self.range_end)
+        self.range_preset = QComboBox()
+        self.range_preset.setMinimumWidth(110)
+        self._load_range_presets()
+        controls.addWidget(self.range_preset)
+        self.range_dimension = QComboBox()
+        self.range_dimension.addItem(t("按分类"), "category")
+        self.range_dimension.addItem(t("按标签"), "tag")
+        self.range_dimension.addItem(t("按账户"), "account")
+        controls.addWidget(self.range_dimension)
+        apply_button = ThemedButton("查看区间", "primary", "search")
+        apply_button.clicked.connect(lambda: self._apply_range())
+        controls.addWidget(apply_button)
+        save_button = ThemedButton("保存预设", "secondary", "save")
+        save_button.clicked.connect(self._save_range_preset)
+        controls.addWidget(save_button)
+        self.range_export = ThemedButton("年度报告 PDF", "secondary", "download")
+        self.range_export.clicked.connect(self._export_range_pdf)
+        controls.addWidget(self.range_export)
+        controls.addStretch(1)
+        self.range_card.body.addLayout(controls)
+
+        summary = QHBoxLayout()
+        summary.setSpacing(20)
+        self.range_income = ValueLabel("", tone="income", size=18, weight=700)
+        self.range_expense = ValueLabel("", tone="expense", size=18, weight=700)
+        self.range_net = ValueLabel("", tone="primary", size=18, weight=700)
+        self.range_rate = ValueLabel("", tone="primary", size=18, weight=700)
+        for title, value in (
+            ("区间收入", self.range_income),
+            ("区间支出", self.range_expense),
+            ("区间结余", self.range_net),
+            ("储蓄率", self.range_rate),
+        ):
+            column = QVBoxLayout()
+            column.setSpacing(2)
+            label = QLabel(t(title))
+            label.setProperty("role", "muted")
+            column.addWidget(label)
+            column.addWidget(value)
+            summary.addLayout(column)
+        summary.addStretch(1)
+        self.range_card.body.addLayout(summary)
+
+        self.range_compare = QLabel()
+        self.range_compare.setProperty("role", "faint")
+        self.range_compare.setWordWrap(True)
+        self.range_card.body.addWidget(self.range_compare)
+        self.range_bars = CategoryBars()
+        self.range_card.body.addWidget(self.range_bars)
+        self.body.addWidget(self.range_card)
+
+        self.range_start.dateChanged.connect(lambda _value: self._mark_custom_range())
+        self.range_end.dateChanged.connect(lambda _value: self._mark_custom_range())
+        self.range_preset.currentIndexChanged.connect(self._range_preset_changed)
+        self.range_dimension.currentIndexChanged.connect(lambda _index: self._apply_range())
+        self._apply_range()
+
+    def _range_dates(self) -> tuple[str, str]:
+        return (
+            self.range_start.date().toString("yyyy-MM-dd"),
+            self.range_end.date().toString("yyyy-MM-dd"),
+        )
+
+    def _mark_custom_range(self) -> None:
+        index = self.range_preset.findData("custom")
+        if index >= 0:
+            self.range_preset.blockSignals(True)
+            self.range_preset.setCurrentIndex(index)
+            self.range_preset.blockSignals(False)
+
+    def _range_preset_changed(self, _index: int) -> None:
+        key = self.range_preset.currentData()
+        today = QDate.currentDate()
+        if key == "month":
+            start = QDate(today.year(), today.month(), 1)
+            end = start.addMonths(1).addDays(-1)
+        elif key == "last_month":
+            start = QDate(today.year(), today.month(), 1).addMonths(-1)
+            end = QDate(today.year(), today.month(), 1).addDays(-1)
+        elif key == "3m":
+            start = QDate(today.year(), today.month(), 1).addMonths(-2)
+            end = today
+        elif key == "year":
+            start = QDate(today.year(), 1, 1)
+            end = QDate(today.year(), 12, 31)
+        elif isinstance(key, str) and key.startswith("saved:"):
+            presets = self._saved_range_presets()
+            item = next((p for p in presets if p.get("name") == key[6:]), None)
+            if item is None:
+                return
+            start = QDate.fromString(item.get("start", ""), "yyyy-MM-dd")
+            end = QDate.fromString(item.get("end", ""), "yyyy-MM-dd")
+        else:
+            return
+        self.range_start.blockSignals(True)
+        self.range_end.blockSignals(True)
+        self.range_start.setDate(start)
+        self.range_end.setDate(end)
+        self.range_start.blockSignals(False)
+        self.range_end.blockSignals(False)
+        self._apply_range()
+
+    def _apply_range(self) -> None:
+        start, end = self._range_dates()
+        dimension = self.range_dimension.currentData() or "category"
+        try:
+            report = self.service.range_report(start, end, dimension)
+        except ValueError as exc:
+            self.window.notify(str(exc))
+            return
+        money = self.service.format
+        self.range_income.setText(money(report.income))
+        self.range_expense.setText(money(report.expense))
+        self.range_net.setText(money(report.net))
+        self.range_net.set_tone("income" if report.net >= 0 else "expense")
+        self.range_rate.setText(f"{report.savings_rate:.1f}%")
+        parts = []
+        for label, current, previous, year in (
+            ("收入", report.income, report.previous_income, report.year_income),
+            ("支出", report.expense, report.previous_expense, report.year_expense),
+        ):
+            chain = self._change_text(report.change(current, previous))
+            yoy = self._change_text(report.change(current, year))
+            parts.append(
+                t(
+                    "{label} 环比 {chain} · 同比 {yoy}",
+                    label=t(label),
+                    chain=chain,
+                    yoy=yoy,
+                )
+            )
+        self.range_compare.setText(" | ".join(parts))
+        total = (
+            sum(item.amount for item in report.breakdown)
+            if dimension != "category"
+            else report.expense
+        )
+        self.range_bars.set_data(report.breakdown[:8], total=max(1, total))
+
+    @staticmethod
+    def _change_text(value: float | None) -> str:
+        return "—" if value is None else f"{value:+.1f}%"
+
+    def _saved_range_presets(self) -> list[dict]:
+        raw = self.window.settings.value("reports/range_presets", "[]")
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+        return [item for item in data if isinstance(item, dict) and item.get("name")]
+
+    def _load_range_presets(self) -> None:
+        self.range_preset.clear()
+        self.range_preset.addItem(t("本月"), "month")
+        self.range_preset.addItem(t("上月"), "last_month")
+        self.range_preset.addItem(t("近 3 个月"), "3m")
+        self.range_preset.addItem(t("今年"), "year")
+        self.range_preset.addItem(t("自定义"), "custom")
+        for preset in self._saved_range_presets():
+            self.range_preset.addItem(preset["name"], f"saved:{preset['name']}")
+
+    def _save_range_preset(self) -> None:
+        name, ok = QInputDialog.getText(self, t("保存区间预设"), t("预设名称"))
+        name = (name or "").strip()[:40]
+        if not ok or not name:
+            return
+        start, end = self._range_dates()
+        presets = [p for p in self._saved_range_presets() if p.get("name") != name]
+        presets.append({"name": name, "start": start, "end": end})
+        self.window.settings.setValue(
+            "reports/range_presets", json.dumps(presets, ensure_ascii=False)
+        )
+        self.window.settings.sync()
+        self._load_range_presets()
+        self.range_preset.setCurrentIndex(self.range_preset.findData(f"saved:{name}"))
+
+    def _export_range_pdf(self) -> None:
+        end = self.range_end.date()
+        start = QDate(end.year(), 1, 1)
+        finish = QDate(end.year(), 12, 31)
+        self.range_start.setDate(start)
+        self.range_end.setDate(finish)
+        self._apply_range()
+        default = f"FinBoard-年度报告-{end.year()}.pdf"
+        target, _ = QFileDialog.getSaveFileName(
+            self, t("导出年度报告"), str(Path.home() / default), "PDF (*.pdf)"
+        )
+        if not target:
+            return
+        try:
+            export_range_pdf(
+                self.service.repo,
+                target,
+                start.toString("yyyy-MM-dd"),
+                finish.toString("yyyy-MM-dd"),
+                title=f"FinBoard 年度报告 {end.year()}",
+            )
+            self.window.notify(t("年度报告已导出"))
+        except OSError as exc:
+            ConfirmDialog.alert(self, t("导出失败"), str(exc))
 
     def _refresh_worth(self, worth, money) -> None:
         total = worth.assets + worth.liabilities

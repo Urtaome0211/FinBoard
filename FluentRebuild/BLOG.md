@@ -277,7 +277,7 @@ if item is not None:
 2. `set_language("en")` 后导航显示 Overview/Settings，标题栏按钮显示 Add transaction；
 3. `set_theme("dark")` 后页面仍然可切换，不崩溃。
 
-合计 **135 tests OK**。
+5.0 初次交付时合计 **135 tests OK**；5.1 为 **158 tests OK**。
 
 ### 7.2 页面与对话框冒烟
 
@@ -304,7 +304,7 @@ python -m PyInstaller FinBoardFluent.spec --noconfirm --clean
 验证：
 
 ```text
-dist/FinBoardFluent/FinBoardFluent.exe --version  → finboard-fluent 5.0.0
+dist/FinBoardFluent/FinBoardFluent.exe --version  → finboard-fluent 5.0.0（5.0 历史包）
 --smoke-test（离屏、临时库）                      → exit 0
 ```
 
@@ -340,15 +340,14 @@ hiddenimports += ["qframelesswindow", "darkdetect", "PySide6.QtSvg"]
 - 11 类对话框可构造；
 - 亮/暗主题、中/英双语；
 - 托盘、提醒、快捷键、撤销、退款、复制上一笔保留；
-- 135 个测试通过；
+- 158 个测试通过；
 - Windows one-dir 包可运行。
 
 没有做：
 
 - 页面内部控件的全面 Fluent 化；
 - 对话框换成 `qfluentwidgets.Dialog`；
-- 逐笔投资 lots、自动行情、报表任意区间/同比/年度报告；
-- 自定义模板、全局迷你输入窗。
+- 自动行情、自定义模板、全局迷你输入窗。
 
 这些不是“忘了”，而是刻意把范围收在“壳层重构 + 功能对齐”。如果继续做，下一步应该优先把对话框统一成 Fluent `Dialog`，再把页面里的 `QPushButton/QLineEdit/QComboBox` 替换成 qfluentwidgets 对应控件——这会是一次更大的视觉改造，测试也要相应调整。
 
@@ -361,12 +360,77 @@ hiddenimports += ["qframelesswindow", "darkdetect", "PySide6.QtSvg"]
 5. **导航是状态机**。`switchTo`、`setCurrentItem`、`current_key` 三处要同步，否则快捷键和搜索会串页。
 6. **测试迁移是最便宜的回归保险**。132 个测试原样通过，比重新点一遍页面更可靠。
 
-## 十一、结语
+## 十一、5.1：从界面重构到核心模型补齐
 
-这次重构证明：对一个已经稳定的桌面应用，**只换壳**是可行的，而且成本远低于重写。真正花时间的不是 `FluentWindow` 本身，而是那些“壳和页面之间”的胶水：导航状态、主题同步、语言刷新、托盘关闭、打包资源。
+界面稳定之后，5.1 没有再动壳层，而是补四块更靠近“财务模型”的能力。它们也暴露了重构项目真正的风险：**迁移、金额拆分和报表口径**。
 
-如果后续要继续 Fluent 化，建议按“对话框 → 表单控件 → 图表容器”的顺序推进，每步都保留 135 个测试作为回归底线。
+### 11.1 数据可靠性：启动时修索引，而不是让用户看到错误
+
+某次真实库启动时 `PRAGMA quick_check` 报 `wrong # of entries in index idx_transactions_refund`。索引损坏不是数据损坏，`REINDEX` 就能修复；但对用户来说，弹“完整性检查未通过”会被理解成数据丢了。
+
+做法是只在错误文本命中 `index/索引` 时自动修复：
+
+```python
+def repair_indexes(db):
+    if not looks_like_index_problem(quick_check(db)[1]):
+        return False, ""
+    create_backup(db, keep=20, reason="before-reindex")
+    db.conn.execute("REINDEX")
+    db.conn.commit()
+    return quick_check(db)
+```
+
+修复前先备份，修复后重跑 `quick_check`；非索引错误仍然走原来的“从备份恢复”提示，不自动冒险。这个边界很重要：**自动修复只处理可证明安全的一类问题**。
+
+### 11.2 投资逐笔流水：持仓不再是“快照”，而是流水的结果
+
+原来的 `holdings` 是成本/数量快照，卖出时直接改数字，无法回答“这笔盈利是哪一批买的”。5.1 增加 `investment_trades`、`investment_lots`、`investment_disposals`，按 `(acquired_date, id)` FIFO 消耗批次。
+
+关键账目：
+
+- 买入：`gross = (qty * price + 500000) // 1000000`，`total_cost = gross + fee`，`unit_cost = round(total_cost * 1e6 / qty)`；
+- 卖出：逐 lot 写 disposal，`cost_total` 求和，`realized = proceeds - cost_total`；
+- 分红：只写 trade，累加 `holdings.dividends`。
+
+迁移时把旧 `holdings` 每行写成一条 `buy` trade 和一个 lot，保证老库升级后持仓不为空。这里踩过的坑是：`transactions.import_hash` 有唯一索引且不排除空串，内部转账必须写 `NULL`，不能写 `''`。
+
+### 11.3 负债还款：本金和利息要拆开
+
+负债页以前只有“欠多少”，没有“还了多少”。5.1 新增 `debt_payments`，每笔还款拆成本金和利息：
+
+- 贷款月息：`(outstanding * rate_bp + 60000) // 120000`；
+- 信用卡：利息为 0，本金=还款额；
+- 还款额超过“剩余本金 + 本期利息”拒绝；
+- 利息不足时允许只付息，本金为 0。
+
+本金部分创建“资金来源 → 负债账户”的转账，利息部分创建“利息支出”支出。这样账户余额、收支报表和负债余额三处口径一致，结清也不会污染支出。
+
+### 11.4 报表查询层：任意区间、同比环比和年度 PDF
+
+月度报表只能看单月，5.1 在报表页加了“区间分析”卡：
+
+- 任意起止日期；
+- 环比（上一等长区间）和同比（去年同区间）；
+- 分类/标签/账户三种维度；
+- 区间预设写入 `QSettings`；
+- 年度报告 PDF 复用 Qt 的 `QTextDocument`，不引入新依赖。
+
+实现上没有改 SQL 聚合，而是复用 `transactions()` 的 hydrated 行，再用 Python 汇总。退款按负数冲减支出，拆分按各分类金额计入，转账手续费单独成项。这样逻辑和 `month_stats` 一致，但代码更直白；代价是大区间会多读一些行，个人账本规模下可以接受。
+
+### 11.5 这一轮的教训
+
+1. **迁移必须可回填**。schema 15→16 的持仓回填、16→17 的还款表，都要能在真实旧库上跑通。
+2. **金额拆分要有唯一口径**。还款、退款、拆分、手续费，任何一个口径不一致，报表就会对不上。
+3. **自动修复要保守**。只修索引，不猜数据；修前备份，修后复检。
+4. **UI 复用不等于不测**。旧 QSS 对话框在新壳里仍要构造、截图、跑交互冒烟。
+5. **退出路径也要测**。`--smoke-test` 的 1200ms 退出和汇率刷新线程撞在一起，Windows 上表现为 exit 127（`0xC0000409`），日志里只有一句 `QThread: Destroyed while thread is still running`。修复不是“把线程 wait 一下”这么简单：新增 `MainWindow.shutdown()` 统一停线程，smoke 模式下直接禁用网络刷新，保证测试快且确定。
+
+## 十二、结语
+
+这次重构证明：对一个已经稳定的桌面应用，**只换壳**是可行的，而且成本远低于重写。真正花时间的不是 `FluentWindow` 本身，而是那些“壳和页面之间”的胶水：导航状态、主题同步、语言刷新、托盘关闭、打包资源；而 5.1 的四项功能说明，壳稳定之后，真正难的是数据迁移和金额口径。
+
+如果后续要继续 Fluent 化，建议按“对话框 → 表单控件 → 图表容器”的顺序推进，每步都保留 158 个测试作为回归底线。
 
 ---
 
-*本文对应的代码在 `FluentRebuild/`，版本 5.0.0；未上传 GitHub。*
+*本文对应的代码在 `FluentRebuild/`，版本 5.1.0；未上传 GitHub。*
