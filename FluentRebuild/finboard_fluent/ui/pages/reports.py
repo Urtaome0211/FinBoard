@@ -1,6 +1,7 @@
 """Visual reports: net worth, spending mix, trends and rankings."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, DateEdit
 
 import json
 from pathlib import Path
@@ -9,12 +10,9 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMenu,
     QVBoxLayout,
@@ -27,6 +25,7 @@ from ...core.models import CategorySpend, PayeeSpend
 from ...i18n import category_display, t
 from ..charts import CategoryBars, DonutChart, SpendingCalendar, TrendChart
 from ..pdf_export import export_pdf, export_range_pdf, pdf_filename
+from ..dialogs.prompt import ask_text
 from ..rows import ElidedLabel
 from ..theme import colors
 from ..widgets import (
@@ -264,35 +263,43 @@ class ReportsPage(Page):
         controls = QHBoxLayout()
         controls.setSpacing(8)
         controls.addWidget(QLabel(t("从")))
-        self.range_start = QDateEdit(QDate(QDate.currentDate().year(), QDate.currentDate().month(), 1))
+        self.range_start = DateEdit(QDate(QDate.currentDate().year(), QDate.currentDate().month(), 1))
         self.range_start.setDisplayFormat("yyyy-MM-dd")
         self.range_start.setCalendarPopup(True)
+        self.range_start.setFixedWidth(220)
         controls.addWidget(self.range_start)
         controls.addWidget(QLabel(t("到")))
-        self.range_end = QDateEdit(QDate.currentDate())
+        self.range_end = DateEdit(QDate.currentDate())
         self.range_end.setDisplayFormat("yyyy-MM-dd")
         self.range_end.setCalendarPopup(True)
+        self.range_end.setFixedWidth(220)
         controls.addWidget(self.range_end)
-        self.range_preset = QComboBox()
-        self.range_preset.setMinimumWidth(110)
+        self.range_preset = ComboBox()
+        self.range_preset.setMinimumWidth(120)
         self._load_range_presets()
         controls.addWidget(self.range_preset)
-        self.range_dimension = QComboBox()
+        self.range_dimension = ComboBox()
         self.range_dimension.addItem(t("按分类"), "category")
         self.range_dimension.addItem(t("按标签"), "tag")
         self.range_dimension.addItem(t("按账户"), "account")
+        self.range_dimension.setMinimumWidth(110)
         controls.addWidget(self.range_dimension)
-        apply_button = ThemedButton("查看区间", "primary", "search")
-        apply_button.clicked.connect(lambda: self._apply_range())
-        controls.addWidget(apply_button)
-        save_button = ThemedButton("保存预设", "secondary", "save")
-        save_button.clicked.connect(self._save_range_preset)
-        controls.addWidget(save_button)
-        self.range_export = ThemedButton("年度报告 PDF", "secondary", "download")
-        self.range_export.clicked.connect(self._export_range_pdf)
-        controls.addWidget(self.range_export)
         controls.addStretch(1)
         self.range_card.body.addLayout(controls)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        apply_button = ThemedButton("查看区间", "primary", "search")
+        apply_button.clicked.connect(lambda: self._apply_range())
+        actions.addWidget(apply_button)
+        save_button = ThemedButton("保存预设", "secondary", "save")
+        save_button.clicked.connect(self._save_range_preset)
+        actions.addWidget(save_button)
+        self.range_export = ThemedButton("年度报告 PDF", "secondary", "download")
+        self.range_export.clicked.connect(self._export_range_pdf)
+        actions.addWidget(self.range_export)
+        actions.addStretch(1)
+        self.range_card.body.addLayout(actions)
 
         summary = QHBoxLayout()
         summary.setSpacing(20)
@@ -332,8 +339,8 @@ class ReportsPage(Page):
 
     def _range_dates(self) -> tuple[str, str]:
         return (
-            self.range_start.date().toString("yyyy-MM-dd"),
-            self.range_end.date().toString("yyyy-MM-dd"),
+            self.range_start.getDate().toString("yyyy-MM-dd"),
+            self.range_end.getDate().toString("yyyy-MM-dd"),
         )
 
     def _mark_custom_range(self) -> None:
@@ -435,7 +442,7 @@ class ReportsPage(Page):
             self.range_preset.addItem(preset["name"], f"saved:{preset['name']}")
 
     def _save_range_preset(self) -> None:
-        name, ok = QInputDialog.getText(self, t("保存区间预设"), t("预设名称"))
+        name, ok = ask_text(self, title=t("保存区间预设"), label=t("预设名称"))
         name = (name or "").strip()[:40]
         if not ok or not name:
             return
@@ -450,7 +457,7 @@ class ReportsPage(Page):
         self.range_preset.setCurrentIndex(self.range_preset.findData(f"saved:{name}"))
 
     def _export_range_pdf(self) -> None:
-        end = self.range_end.date()
+        end = self.range_end.getDate()
         start = QDate(end.year(), 1, 1)
         finish = QDate(end.year(), 12, 31)
         self.range_start.setDate(start)

@@ -1,15 +1,13 @@
 """Fixed-term deposit editor."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, DateEdit, LineEdit
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QLabel,
-    QLineEdit,
     QWidget,
 )
 
@@ -65,33 +63,33 @@ class DepositDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-        self.name_input = QLineEdit()
+        self.name_input = LineEdit()
         self.name_input.setPlaceholderText(t("例如：一年期整存整取"))
         self.name_input.setText(t("定期存款 {date}", date=QDate.currentDate().toString("yyyy-MM-dd")))
-        self.principal_input = QLineEdit()
+        self.principal_input = LineEdit()
         self.principal_input.setPlaceholderText("0.00")
-        self.currency_combo = QComboBox()
+        self.currency_combo = ComboBox()
         for code, meta in CURRENCIES.items():
             self.currency_combo.addItem(f"{meta['symbol']}  {code} · {meta['name']}", code)
         self.currency_combo.setCurrentIndex(
             max(0, self.currency_combo.findData(service.currency))
         )
-        self.rate_input = QLineEdit("3.00")
+        self.rate_input = LineEdit("3.00")
         self.rate_input.setPlaceholderText("3.00")
-        self.term_combo = QComboBox()
+        self.term_combo = ComboBox()
         for months in TERMS:
             self.term_combo.addItem(t("{count} 个月", count=months), months)
         self.term_combo.setCurrentIndex(TERMS.index(12))
-        self.start_edit = QDateEdit(QDate.currentDate())
+        self.start_edit = DateEdit(QDate.currentDate())
         self.start_edit.setCalendarPopup(True)
         self.start_edit.setDisplayFormat("yyyy-MM-dd")
-        self.early_rate_input = QLineEdit("0.20")
+        self.early_rate_input = LineEdit("0.20")
         self.early_rate_input.setPlaceholderText("0.20")
-        self.source_combo = QComboBox()
+        self.source_combo = ComboBox()
         self.source_combo.setMinimumWidth(300)
-        self.destination_combo = QComboBox()
+        self.destination_combo = ComboBox()
         self.destination_combo.setMinimumWidth(300)
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注"))
 
         form.addRow(form_label(t("名称")), self.name_input)
@@ -184,7 +182,7 @@ class DepositDialog(QDialog):
             self.preview.set_tone("muted")
             return
         months = int(self.term_combo.currentData() or 12)
-        start = self.start_edit.date().toString("yyyy-MM-dd")
+        start = self.start_edit.getDate().toString("yyyy-MM-dd")
         maturity = add_months(start, months)
         interest = term_deposit_interest(principal, rate, months)
         self.preview.setText(
@@ -221,7 +219,7 @@ class DepositDialog(QDialog):
                 currency=self._currency(),
                 annual_rate_bp=annual_rate,
                 term_months=int(self.term_combo.currentData() or 12),
-                start_date=self.start_edit.date().toString("yyyy-MM-dd"),
+                start_date=self.start_edit.getDate().toString("yyyy-MM-dd"),
                 early_rate_bp=early_rate,
                 source_account_id=int(source_id),
                 destination_account_id=int(destination_id),

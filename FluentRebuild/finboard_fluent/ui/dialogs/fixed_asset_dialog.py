@@ -1,15 +1,13 @@
 """Create or edit a fixed asset (home, vehicle, other long-term property)."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, DateEdit, LineEdit
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QLabel,
-    QLineEdit,
 )
 
 from ...core.models import FIXED_ASSET_TYPE_META, FIXED_ASSET_TYPES, FixedAsset
@@ -56,12 +54,12 @@ class FixedAssetDialog(QDialog):
         form.setVerticalSpacing(13)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
-        self.name_input = QLineEdit()
+        self.name_input = LineEdit()
         self.name_input.setPlaceholderText(t("例如：自住房、家用车"))
         self.name_input.setMaxLength(60)
         form.addRow(form_label(t("资产名称")), self.name_input)
 
-        self.type_combo = QComboBox()
+        self.type_combo = ComboBox()
         palette = colors()
         for type_name in FIXED_ASSET_TYPES:
             meta = FIXED_ASSET_TYPE_META[type_name]
@@ -72,29 +70,29 @@ class FixedAssetDialog(QDialog):
             )
         form.addRow(form_label(t("资产类型")), self.type_combo)
 
-        self.purchase_input = QLineEdit()
+        self.purchase_input = LineEdit()
         self.purchase_input.setPlaceholderText(t("购买时的价格，0 表示未填写"))
         self.purchase_input.setMaxLength(20)
         form.addRow(form_label(t("购买价")), self.purchase_input)
 
-        self.value_input = QLineEdit()
+        self.value_input = LineEdit()
         self.value_input.setPlaceholderText(t("当前估值，例如：1200000"))
         self.value_input.setMaxLength(20)
         form.addRow(form_label(t("当前估值")), self.value_input)
 
-        self.currency_combo = QComboBox()
+        self.currency_combo = ComboBox()
         for code, meta in CURRENCIES.items():
             self.currency_combo.addItem(
                 currency_display(code, meta["symbol"], meta["name"]), code
             )
         form.addRow(form_label(t("币种")), self.currency_combo)
 
-        self.date_edit = QDateEdit(QDate.currentDate())
+        self.date_edit = DateEdit(QDate.currentDate())
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         form.addRow(form_label(t("估值日期")), self.date_edit)
 
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注，例如：小区、车牌"))
         self.note_input.setMaxLength(200)
         form.addRow(form_label(t("备注")), self.note_input)
@@ -193,7 +191,7 @@ class FixedAssetDialog(QDialog):
                     type_=type_name,
                     purchase_price=purchase,
                     current_value=current,
-                    valuation_date=self.date_edit.date().toString("yyyy-MM-dd"),
+                    valuation_date=self.date_edit.getDate().toString("yyyy-MM-dd"),
                     currency=self.currency_combo.currentData() or "CNY",
                     note=self.note_input.text().strip(),
                 )
@@ -203,7 +201,7 @@ class FixedAssetDialog(QDialog):
                     type_name,
                     purchase,
                     current,
-                    self.date_edit.date().toString("yyyy-MM-dd"),
+                    self.date_edit.getDate().toString("yyyy-MM-dd"),
                     currency=self.currency_combo.currentData() or "CNY",
                     note=self.note_input.text().strip(),
                 )

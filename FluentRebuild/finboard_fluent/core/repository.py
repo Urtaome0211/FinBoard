@@ -70,6 +70,7 @@ from .models import (
     TransactionBalance,
     TransactionFilter,
     TransactionSplit,
+    TransactionTemplate,
 )
 from .insights import FixedCost, detect_fixed_costs
 from .investing import xirr
@@ -1900,6 +1901,33 @@ class Repository:
 
     def delete_holding(self, holding_id: int) -> None:
         self.conn.execute("DELETE FROM holdings WHERE id = ?", (holding_id,))
+        self.conn.commit()
+
+    def update_holding_price(self, holding_id: int, price: int) -> None:
+        """Update only the market price, used by quote refresh."""
+        self.get_holding(holding_id)
+        value = int(price)
+        if value < 0 or value > MAX_AMOUNT_CENTS:
+            raise ValueError("现价超出允许范围")
+        self.conn.execute(
+            "UPDATE holdings SET price = ?, updated_at = ? WHERE id = ?",
+            (value, now_iso(), holding_id),
+        )
+        self.conn.commit()
+
+    # ------------------------------------------------------------ app metadata
+    def meta_get(self, key: str, default: str = "") -> str:
+        row = self.conn.execute(
+            "SELECT value FROM app_meta WHERE key = ?", (str(key),)
+        ).fetchone()
+        return str(row["value"]) if row else default
+
+    def meta_set(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO app_meta (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(key), str(value)),
+        )
         self.conn.commit()
 
     def holdings_summary(self, account_id: int | None = None) -> HoldingsSummary:
@@ -5211,6 +5239,167 @@ class Repository:
                 changed += 1
         return changed
 
+    # ------------------------------------------------------- transaction templates
+    @staticmethod
+    def _template(row: sqlite3.Row) -> TransactionTemplate:
+        return TransactionTemplate(
+            id=int(row["id"]),
+            name=str(row["name"]),
+            kind=str(row["kind"]),
+            amount=int(row["amount"]),
+            currency=str(row["currency"]),
+            category_id=row["category_id"],
+            category_name=str(row["category_name"] or ""),
+            account_id=row["account_id"],
+            account_name=str(row["account_name"] or ""),
+            to_account_id=row["to_account_id"],
+            to_account_name=str(row["to_account_name"] or ""),
+            payee=str(row["payee"] or ""),
+            note=str(row["note"] or ""),
+            created_at=str(row["created_at"] or ""),
+        )
+
+    _TEMPLATE_SELECT = """
+        SELECT t.id, t.name, t.kind, t.amount, t.currency,
+               t.category_id, c.name AS category_name,
+               t.account_id, a.name AS account_name,
+               t.to_account_id, ta.name AS to_account_name,
+               t.payee, t.note, t.created_at
+        FROM transaction_templates t
+        LEFT JOIN categories c ON c.id = t.category_id
+        LEFT JOIN accounts a ON a.id = t.account_id
+        LEFT JOIN accounts ta ON ta.id = t.to_account_id
+    """
+
+    def transaction_templates(self) -> list[TransactionTemplate]:
+        rows = self.conn.execute(
+            self._TEMPLATE_SELECT + " ORDER BY t.name COLLATE NOCASE, t.id"
+        ).fetchall()
+        return [self._template(row) for row in rows]
+
+    def get_transaction_template(self, template_id: int) -> TransactionTemplate:
+        row = self.conn.execute(
+            self._TEMPLATE_SELECT + " WHERE t.id = ?", (template_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("模板不存在")
+        return self._template(row)
+
+    def _template_values(
+        self,
+        name: str,
+        kind: str,
+        amount: int,
+        currency: str,
+        category_id: int | None,
+        account_id: int | None,
+        to_account_id: int | None,
+        payee: str,
+        note: str,
+    ) -> tuple:
+        cleaned = self._clean_name(name, "模板名称")
+        if kind not in ("expense", "income", "transfer"):
+            raise ValueError("记录类型不正确")
+        amount = int(amount or 0)
+        if amount < 0 or amount > MAX_AMOUNT_CENTS:
+            raise ValueError("金额超出范围")
+        if currency not in CURRENCIES:
+            raise ValueError("请选择有效的币种")
+        if category_id is not None:
+            category = self.get_category(int(category_id))
+            if kind == "transfer":
+                raise ValueError("转账模板不能选择分类")
+            if category.kind != kind:
+                raise ValueError("分类与记录类型不匹配")
+        else:
+            category_id = None
+        if account_id is not None:
+            account = self.get_account(int(account_id), include_archived=True)
+            if account.is_system:
+                raise ValueError("系统账户不能用于模板")
+        if to_account_id is not None:
+            target = self.get_account(int(to_account_id), include_archived=True)
+            if target.is_system:
+                raise ValueError("系统账户不能用于模板")
+            if to_account_id == account_id:
+                raise ValueError("转出账户和转入账户不能相同")
+        if kind == "transfer" and to_account_id is None:
+            raise ValueError("转账模板需要选择转入账户")
+        return (
+            cleaned,
+            kind,
+            amount,
+            currency,
+            category_id,
+            account_id,
+            to_account_id,
+            str(payee or "").strip()[:60],
+            str(note or "").strip()[:200],
+        )
+
+    def add_transaction_template(
+        self,
+        name: str,
+        *,
+        kind: str,
+        amount: int = 0,
+        currency: str = "CNY",
+        category_id: int | None = None,
+        account_id: int | None = None,
+        to_account_id: int | None = None,
+        payee: str = "",
+        note: str = "",
+    ) -> int:
+        values = self._template_values(
+            name,
+            kind,
+            amount,
+            currency,
+            category_id,
+            account_id,
+            to_account_id,
+            payee,
+            note,
+        )
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
+                "INSERT INTO transaction_templates"
+                " (name, kind, amount, currency, category_id, account_id,"
+                "  to_account_id, payee, note, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (*values, now_iso()),
+            )
+            return int(cursor.lastrowid)
+
+    def update_transaction_template(self, template_id: int, **fields) -> None:
+        current = self.get_transaction_template(template_id)
+        values = self._template_values(
+            fields.get("name", current.name),
+            fields.get("kind", current.kind),
+            fields.get("amount", current.amount),
+            fields.get("currency", current.currency),
+            fields.get("category_id", current.category_id),
+            fields.get("account_id", current.account_id),
+            fields.get("to_account_id", current.to_account_id),
+            fields.get("payee", current.payee),
+            fields.get("note", current.note),
+        )
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE transaction_templates SET name = ?, kind = ?, amount = ?,"
+                " currency = ?, category_id = ?, account_id = ?, to_account_id = ?,"
+                " payee = ?, note = ?, updated_at = ? WHERE id = ?",
+                (*values, now_iso(), template_id),
+            )
+
+    def delete_transaction_template(self, template_id: int) -> None:
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM transaction_templates WHERE id = ?", (template_id,)
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("模板不存在")
+
     # -------------------------------------------------------------- bulk / CSV
     def insert_normalized(self, rows: Iterable[dict]) -> int:
         """Insert already-validated rows in one transaction (used by CSV import)."""
@@ -5265,6 +5454,7 @@ class Repository:
     def clear_all(self, *, seed_defaults: bool = True) -> None:
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM transactions")
+            conn.execute("DELETE FROM transaction_templates")
             conn.execute("DELETE FROM term_deposits")
             conn.execute("DELETE FROM planned_transactions")
             conn.execute("DELETE FROM receivables")

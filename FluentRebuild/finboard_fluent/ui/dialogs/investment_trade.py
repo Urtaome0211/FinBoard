@@ -1,18 +1,15 @@
 """Investment trade entry and FIFO lot history."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, DateEdit, LineEdit, TableWidget
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -71,7 +68,7 @@ class TradeDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(11)
-        self.holding_combo = QComboBox()
+        self.holding_combo = ComboBox()
         self.holding_combo.setMinimumWidth(300)
         for item in service.holdings(account.id):
             self.holding_combo.addItem(
@@ -79,22 +76,22 @@ class TradeDialog(QDialog):
                 f"{format_quantity(item.quantity_units)}",
                 item.id,
             )
-        self.name_input = QLineEdit()
+        self.name_input = LineEdit()
         self.name_input.setPlaceholderText(t("例如：沪深300ETF、苹果"))
-        self.symbol_input = QLineEdit()
+        self.symbol_input = LineEdit()
         self.symbol_input.setPlaceholderText(t("可选，例如 510300、AAPL"))
-        self.date_edit = QDateEdit(QDate.currentDate())
+        self.date_edit = DateEdit(QDate.currentDate())
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.date_edit.setCalendarPopup(True)
-        self.quantity_input = QLineEdit()
+        self.quantity_input = LineEdit()
         self.quantity_input.setPlaceholderText(t("例如：1000 或 12.5"))
-        self.price_input = QLineEdit()
+        self.price_input = LineEdit()
         self.price_input.setPlaceholderText(t("每股价格"))
-        self.fee_input = QLineEdit()
+        self.fee_input = LineEdit()
         self.fee_input.setPlaceholderText(t("可选，买卖手续费"))
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setPlaceholderText(t("现金分红金额"))
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注"))
 
         form.addRow(form_label(t("持仓")), self.holding_combo)
@@ -210,7 +207,7 @@ class TradeDialog(QDialog):
                     kind="sell",
                     symbol=symbol,
                     name=name,
-                    trade_date=self.date_edit.date().toString("yyyy-MM-dd"),
+                    trade_date=self.date_edit.getDate().toString("yyyy-MM-dd"),
                     quantity_units=quantity,
                     price=price,
                     fee=fee,
@@ -227,7 +224,7 @@ class TradeDialog(QDialog):
                     kind="buy",
                     symbol=self.symbol_input.text(),
                     name=self.name_input.text(),
-                    trade_date=self.date_edit.date().toString("yyyy-MM-dd"),
+                    trade_date=self.date_edit.getDate().toString("yyyy-MM-dd"),
                     quantity_units=quantity,
                     price=price,
                     fee=fee,
@@ -240,7 +237,7 @@ class TradeDialog(QDialog):
                     kind="dividend",
                     symbol=self.symbol_input.text(),
                     name=self.name_input.text() or t("现金分红"),
-                    trade_date=self.date_edit.date().toString("yyyy-MM-dd"),
+                    trade_date=self.date_edit.getDate().toString("yyyy-MM-dd"),
                     amount=amount,
                     note=self.note_input.text(),
                 )
@@ -342,12 +339,12 @@ class InvestmentTradesDialog(QDialog):
         label.setProperty("role", "cardTitle")
         return label
 
-    def _make_table(self, headers: list[str]) -> QTableWidget:
-        table = QTableWidget(0, len(headers))
+    def _make_table(self, headers: list[str]) -> TableWidget:
+        table = TableWidget(0, len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(TableWidget.SelectionBehavior.SelectRows)
         table.setShowGrid(False)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)

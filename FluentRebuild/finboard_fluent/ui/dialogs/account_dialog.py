@@ -1,8 +1,9 @@
 """Create or edit an asset / liability account."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, LineEdit
 
-from PySide6.QtWidgets import QComboBox, QDialog, QFormLayout, QLabel, QLineEdit
+from PySide6.QtWidgets import QDialog, QFormLayout, QLabel
 
 from ...core.models import ACCOUNT_TYPE_META, ACCOUNT_TYPES, Account
 from ...core.money import CURRENCIES, parse_signed_amount
@@ -52,12 +53,12 @@ class AccountDialog(QDialog):
         form.setVerticalSpacing(13)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
-        self.name_input = QLineEdit()
+        self.name_input = LineEdit()
         self.name_input.setPlaceholderText(t("例如：招商银行储蓄卡"))
         self.name_input.setMaxLength(40)
         form.addRow(form_label("账户名称"), self.name_input)
 
-        self.type_combo = QComboBox()
+        self.type_combo = ComboBox()
         palette = colors()
         for type_name in ACCOUNT_TYPES:
             meta = ACCOUNT_TYPE_META[type_name]
@@ -69,7 +70,7 @@ class AccountDialog(QDialog):
             )
         form.addRow(form_label("账户类型"), self.type_combo)
 
-        self.currency_combo = QComboBox()
+        self.currency_combo = ComboBox()
         for code, meta in CURRENCIES.items():
             self.currency_combo.addItem(
                 currency_display(code, meta["symbol"], meta["name"]), code
@@ -77,13 +78,13 @@ class AccountDialog(QDialog):
         self.currency_combo.setToolTip(t("账户余额以此币种记账；总览按每日汇率折算"))
         form.addRow(form_label("账户币种"), self.currency_combo)
 
-        self.opening_input = QLineEdit()
+        self.opening_input = LineEdit()
         self.opening_input.setPlaceholderText(t("0.00，例如：12000"))
         self.opening_input.setMaxLength(20)
         self.opening_label = form_label("期初余额")
         form.addRow(self.opening_label, self.opening_input)
 
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注，例如：工资卡"))
         self.note_input.setMaxLength(120)
         form.addRow(form_label("备注"), self.note_input)

@@ -1,15 +1,14 @@
 """Record daily market values for an investment account."""
 
 from __future__ import annotations
+from ..fluent_controls import DateEdit, LineEdit
 
 from PySide6.QtCore import QDate, Signal
 from PySide6.QtWidgets import (
-    QDateEdit,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -143,7 +142,7 @@ class ValuationDialog(QDialog):
         form_row = QHBoxLayout()
         form_row.setSpacing(12)
         form_row.addWidget(form_label("日期"))
-        self.date_input = QDateEdit()
+        self.date_input = DateEdit()
         self.date_input.setCalendarPopup(True)
         self.date_input.setDisplayFormat("yyyy-MM-dd")
         self.date_input.setDate(QDate.currentDate())
@@ -152,7 +151,7 @@ class ValuationDialog(QDialog):
         form_row.addWidget(self.date_input)
         form_row.addSpacing(8)
         form_row.addWidget(form_label("市值"))
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setPlaceholderText("今日收盘总市值")
         self.amount_input.setMaxLength(20)
         self.amount_input.setMinimumWidth(150)
@@ -163,7 +162,7 @@ class ValuationDialog(QDialog):
         note_row = QHBoxLayout()
         note_row.setSpacing(12)
         note_row.addWidget(form_label("备注"))
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText("可选，例如：月末收盘 / 转入资金")
         self.note_input.setMaxLength(120)
         note_row.addWidget(self.note_input, 1)
@@ -280,7 +279,7 @@ class ValuationDialog(QDialog):
         self._refresh()
 
     def _save(self) -> None:
-        day = self.date_input.date().toString("yyyy-MM-dd")
+        day = self.date_input.getDate().toString("yyyy-MM-dd")
         try:
             value = parse_signed_amount(self.amount_input.text())
         except ValueError as exc:

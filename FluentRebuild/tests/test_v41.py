@@ -21,7 +21,7 @@ class FixedAssetTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_schema_and_net_worth(self) -> None:
-        self.assertEqual(self.db.conn.execute("PRAGMA user_version").fetchone()[0], 17)
+        self.assertEqual(self.db.conn.execute("PRAGMA user_version").fetchone()[0], 18)
         self.repo.add_fixed_asset(
             "自住房",
             "property",

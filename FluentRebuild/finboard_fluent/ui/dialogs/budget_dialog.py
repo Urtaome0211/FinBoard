@@ -1,8 +1,9 @@
 """Set a monthly budget for the whole month or one expense category."""
 
 from __future__ import annotations
+from ..fluent_controls import CheckBox, ComboBox, LineEdit
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QFormLayout, QLabel, QLineEdit
+from PySide6.QtWidgets import QDialog, QFormLayout, QLabel
 
 from ...core.dates import month_label
 from ...core.models import BudgetLine
@@ -56,7 +57,7 @@ class BudgetDialog(QDialog):
         month_row = QLabel(month_label(month))
         form.addRow(form_label("月份"), month_row)
 
-        self.category_combo = QComboBox()
+        self.category_combo = ComboBox()
         palette = colors()
         if line:
             self.category_combo.addItem(
@@ -79,13 +80,13 @@ class BudgetDialog(QDialog):
                 )
         form.addRow(form_label("预算对象"), self.category_combo)
 
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setPlaceholderText("0.00")
         self.amount_input.setMaxLength(20)
         form.addRow(form_label("预算金额"), self.amount_input)
         layout.addLayout(form)
 
-        self.rollover_check = QCheckBox(t("结转到下月"))
+        self.rollover_check = CheckBox(t("结转到下月"))
         self.rollover_check.setToolTip(t("本月未用完的预算可以带到下个月继续使用"))
         layout.addWidget(self.rollover_check)
 

@@ -1,15 +1,13 @@
 """Savings goal editor and quick deposit dialog."""
 
 from __future__ import annotations
+from ..fluent_controls import CheckBox, DateEdit, LineEdit
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QHBoxLayout,
-    QLineEdit,
     QWidget,
 )
 
@@ -45,15 +43,15 @@ class GoalDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-        self.name_input = QLineEdit()
+        self.name_input = LineEdit()
         self.name_input.setPlaceholderText(t("例如：旅行基金、应急金、买房首付"))
-        self.target_input = QLineEdit()
+        self.target_input = LineEdit()
         self.target_input.setPlaceholderText("0.00")
-        self.saved_input = QLineEdit()
+        self.saved_input = LineEdit()
         self.saved_input.setPlaceholderText("0.00")
         self.saved_input.setText("0.00")
-        self.date_check = QCheckBox(t("设置目标日期"))
-        self.date_edit = QDateEdit(QDate.currentDate().addYears(1))
+        self.date_check = CheckBox(t("设置目标日期"))
+        self.date_edit = DateEdit(QDate.currentDate().addYears(1))
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.date_edit.setEnabled(False)
@@ -62,7 +60,7 @@ class GoalDialog(QDialog):
         date_row.setSpacing(8)
         date_row.addWidget(self.date_check)
         date_row.addWidget(self.date_edit, 1)
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注，例如：每月存入 500"))
 
         form.addRow(form_label(t("名称")), self.name_input)
@@ -131,7 +129,7 @@ class GoalDialog(QDialog):
         if saved < 0:
             show_error(self.error, t("已存金额不能为负数"))
             return
-        day = self.date_edit.date().toString("yyyy-MM-dd") if self.date_check.isChecked() else None
+        day = self.date_edit.getDate().toString("yyyy-MM-dd") if self.date_check.isChecked() else None
         try:
             if self.goal:
                 self.service.update_savings_goal(
@@ -179,7 +177,7 @@ class GoalDepositDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setPlaceholderText(t("存入金额"))
         form.addRow(form_label(t("金额")), self.amount_input)
         root.addLayout(form)

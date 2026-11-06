@@ -1,6 +1,7 @@
 """Preferences, data tools and app information."""
 
 from __future__ import annotations
+from ..fluent_controls import LineEdit
 
 import os
 import sqlite3
@@ -15,7 +16,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QVBoxLayout,
 )
 
@@ -54,12 +54,14 @@ class SettingsPage(Page):
         self._build_notifications()
         self._build_currency()
         self._build_rates()
+        self._build_quotes()
         self._build_categories()
         self._build_data()
         self._build_about()
         self.body.addStretch(1)
 
         self._update_rate_labels()
+        self._update_quote_labels()
         theme_store.changed.connect(self._sync_theme)
 
     # ------------------------------------------------------------------
@@ -227,6 +229,72 @@ class SettingsPage(Page):
             pieces.append(f"1 CNY = {rates[code]:.4f} {code}")
         self.rate_detail.setText("  ·  ".join(pieces))
 
+    def _build_quotes(self) -> None:
+        card = Card(padding=20, spacing=14)
+        card.add_header("行情", "可选 · 腾讯行情 · 更新持仓现价")
+        row = self._row(
+            "自动更新",
+            "启动时自动拉取一次持仓行情；失败时继续使用缓存与手动填写的现价。",
+        )
+        self.quote_auto_control = SegmentedControl(
+            [("启用", True), ("停用", False)],
+            self.window.settings.value("quotes/auto", False, type=bool),
+        )
+        self.quote_auto_control.setFixedWidth(180)
+        self.quote_auto_control.changed.connect(self._quote_auto_changed)
+        row.addWidget(self.quote_auto_control)
+        card.body.addLayout(row)
+
+        manual_row = self._row(
+            "立即更新",
+            "只会更新填了股票/基金代码、且币种为 CNY 的持仓；网络失败不影响本地数据。",
+        )
+        self.quote_button = ThemedButton("更新行情", "soft", "refresh")
+        self.quote_button.clicked.connect(self._refresh_quotes)
+        manual_row.addWidget(self.quote_button)
+        card.body.addLayout(manual_row)
+
+        self.quote_status = QLabel()
+        self.quote_status.setProperty("role", "muted")
+        self.quote_status.setWordWrap(True)
+        card.body.addWidget(self.quote_status)
+        self.body.addWidget(card)
+
+    def _quote_auto_changed(self, enabled) -> None:
+        self.window.settings.setValue("quotes/auto", bool(enabled))
+        self.window.settings.sync()
+        if enabled:
+            self.window._auto_refresh_quotes()
+
+    def _refresh_quotes(self) -> None:
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.quote_button.setEnabled(False)
+        try:
+            quotes = self.service.refresh_quotes()
+            if quotes:
+                self.window.notify(t("已更新 {count} 个行情", count=len(quotes)))
+            else:
+                self.window.notify(t("没有可更新的行情"))
+        except Exception as exc:
+            ConfirmDialog.alert(self, t("行情更新失败"), str(exc), icon_name="alert")
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.quote_button.setEnabled(True)
+            self._update_quote_labels()
+
+    def _update_quote_labels(self) -> None:
+        quotes, fetched_at = self.service.quote_cache()
+        if not fetched_at:
+            self.quote_status.setText(t("尚未更新行情"))
+            return
+        self.quote_status.setText(
+            t(
+                "行情更新于 {time} · {count} 个代码 · 来源腾讯行情",
+                time=fetched_at[:16].replace("T", " "),
+                count=len(quotes),
+            )
+        )
+
     def _build_categories(self) -> None:
         card = Card(padding=20, spacing=14)
         card.add_header("分类", "支出与收入分类")
@@ -261,7 +329,7 @@ class SettingsPage(Page):
         row.addWidget(open_dir)
         card.body.addLayout(row)
 
-        path = QLineEdit(str(self.service.repo.db.path))
+        path = LineEdit(str(self.service.repo.db.path))
         path.setReadOnly(True)
         path.setCursorPosition(0)
         card.body.addWidget(path)
@@ -359,7 +427,7 @@ class SettingsPage(Page):
         about.body.addWidget(meta)
         shortcuts = QLabel(
             t(
-                "快捷键：Ctrl+N 记一笔 · Ctrl+Shift+N 复制上一笔 · Ctrl+F 搜索 · "
+                "快捷键：Ctrl+N 记一笔 · Ctrl+Shift+N 复制上一笔 · Ctrl+Alt+N 快速记账 · Ctrl+F 搜索 · "
                 "Ctrl+Z 撤销上一步 · Ctrl+1…9 切换页面 · Ctrl+, 设置"
             )
         )
@@ -376,6 +444,7 @@ class SettingsPage(Page):
             self.currency_combo.setCurrentIndex(index)
             self.currency_combo.blockSignals(False)
         self._update_rate_labels()
+        self._update_quote_labels()
         self._update_backup_label()
 
     def _sync_theme(self) -> None:

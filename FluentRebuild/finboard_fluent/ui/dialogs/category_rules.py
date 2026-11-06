@@ -1,15 +1,14 @@
 """Automatic category rules: payee keyword to category and tags."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, LineEdit
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -91,7 +90,7 @@ class CategoryRulesDialog(QDialog):
         form_layout.setContentsMargins(16, 16, 16, 16)
         form_layout.setSpacing(10)
 
-        self.pattern_input = QLineEdit()
+        self.pattern_input = LineEdit()
         self.pattern_input.setPlaceholderText(t("付款对象包含的关键词，例如：星巴克"))
         self.pattern_input.setMaxLength(40)
         form_layout.addWidget(self.pattern_input)
@@ -105,13 +104,13 @@ class CategoryRulesDialog(QDialog):
         self.kind_control.changed.connect(lambda _value: self._load_categories())
         selector.addWidget(self.kind_control)
 
-        self.category_combo = QComboBox()
+        self.category_combo = ComboBox()
         self.category_combo.setMinimumWidth(220)
         self.category_combo.setProperty("i18nSkip", True)
         selector.addWidget(self.category_combo, 1)
         form_layout.addLayout(selector)
 
-        self.tags_input = QLineEdit()
+        self.tags_input = LineEdit()
         self.tags_input.setPlaceholderText(t("可选标签，用逗号分隔，例如：咖啡,常去"))
         self.tags_input.setMaxLength(120)
         form_layout.addWidget(self.tags_input)

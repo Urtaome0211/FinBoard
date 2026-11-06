@@ -185,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         language=initial_language,
         theme=initial_theme,
         auto_refresh_rates=not args.smoke_test,
+        auto_refresh_quotes=not args.smoke_test,
     )
     window.show()
     if fallback is not None:
@@ -206,7 +207,8 @@ def main(argv: list[str] | None = None) -> int:
 
     def _shutdown() -> None:
         try:
-            window.shutdown()
+            live = MainWindow._live or window
+            live.shutdown()
         except Exception:
             pass
         try:

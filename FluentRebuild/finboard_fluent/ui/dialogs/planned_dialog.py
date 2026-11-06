@@ -1,15 +1,13 @@
 """One-off planned transaction editor."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, DateEdit, LineEdit
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QLabel,
-    QLineEdit,
     QWidget,
 )
 
@@ -58,25 +56,25 @@ class PlannedDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-        self.date_edit = QDateEdit(QDate.currentDate())
+        self.date_edit = DateEdit(QDate.currentDate())
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setPlaceholderText("0.00")
-        self.account_combo = QComboBox()
+        self.account_combo = ComboBox()
         for account in service.repo.accounts():
             self.account_combo.addItem(
                 f"{account.name} · {account.currency}", account.id
             )
         self.category_label = QLabel(t("分类"))
         self.category_label.setProperty("role", "muted")
-        self.category_combo = QComboBox()
+        self.category_combo = ComboBox()
         self.to_label = QLabel(t("转入账户"))
         self.to_label.setProperty("role", "muted")
-        self.to_combo = QComboBox()
-        self.payee_input = QLineEdit()
+        self.to_combo = ComboBox()
+        self.payee_input = LineEdit()
         self.payee_input.setPlaceholderText(t("例如：首付、学费、年终奖"))
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注"))
         form.addRow(form_label(t("日期")), self.date_edit)
         form.addRow(form_label(t("金额")), self.amount_input)
@@ -163,7 +161,7 @@ class PlannedDialog(QDialog):
             return
         try:
             self.service.add_planned_transaction(
-                date=self.date_edit.date().toString("yyyy-MM-dd"),
+                date=self.date_edit.getDate().toString("yyyy-MM-dd"),
                 kind=kind,
                 amount=amount,
                 account_id=int(account_id),

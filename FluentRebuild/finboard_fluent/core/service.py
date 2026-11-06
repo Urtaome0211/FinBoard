@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
+import json
 import shutil
 import uuid
 
@@ -39,6 +42,7 @@ from .models import (
 from .money import CURRENCIES, format_cents, format_compact, format_percentage
 from .paths import attachment_path, attachments_dir
 from .rates import RateSnapshot, RateStore
+from .quotes import Quote, fetch_quotes, normalize_symbol
 from .repository import Repository
 
 
@@ -122,6 +126,78 @@ class FinanceService(QObject):
         if error:
             return f"使用缓存汇率 {latest}（更新失败）"
         return f"汇率日期 {latest}"
+
+    # ------------------------------------------------------------ market quotes
+    def quote_symbols(self) -> list[str]:
+        symbols = {
+            normalize_symbol(item.symbol)
+            for item in self.repo.holdings()
+            if item.quantity_units > 0 and item.currency == "CNY"
+        }
+        return sorted(symbol for symbol in symbols if symbol)
+
+    def quote_cache(self) -> tuple[list[Quote], str]:
+        raw = self.repo.meta_get("quotes/cache", "")
+        if not raw:
+            return [], ""
+        try:
+            data = json.loads(raw)
+            quotes = [Quote(**item) for item in data.get("quotes", [])]
+        except (TypeError, ValueError, KeyError):
+            return [], ""
+        return quotes, str(data.get("fetched_at", ""))
+
+    def refresh_quotes(self, symbols: list[str] | None = None) -> list[Quote]:
+        quotes = self.fetch_market_quotes(symbols)
+        self.apply_market_quotes(quotes)
+        return quotes
+
+    def fetch_market_quotes(self, symbols: list[str] | None = None) -> list[Quote]:
+        """Network-only part, safe to call from a worker thread."""
+        codes = symbols if symbols is not None else self.quote_symbols()
+        return fetch_quotes(codes)
+
+    def apply_market_quotes(self, quotes: list[Quote]) -> None:
+        """Apply fetched prices on the GUI thread, then cache and notify."""
+        by_symbol = {quote.symbol: quote for quote in quotes}
+        for holding in self.repo.holdings():
+            if holding.currency != "CNY":
+                continue
+            quote = by_symbol.get(normalize_symbol(holding.symbol))
+            if quote is not None and quote.price != holding.price:
+                self.repo.update_holding_price(holding.id, quote.price)
+        fetched_at = datetime.now().isoformat(timespec="seconds")
+        self.repo.meta_set(
+            "quotes/cache",
+            json.dumps(
+                {
+                    "fetched_at": fetched_at,
+                    "quotes": [asdict(quote) for quote in quotes],
+                },
+                ensure_ascii=False,
+            ),
+        )
+        self.changed.emit()
+
+    # ------------------------------------------------------------ templates
+    def transaction_templates(self):
+        return self.repo.transaction_templates()
+
+    def get_transaction_template(self, template_id: int):
+        return self.repo.get_transaction_template(template_id)
+
+    def add_transaction_template(self, name: str, **fields) -> int:
+        template_id = self.repo.add_transaction_template(name, **fields)
+        self.changed.emit()
+        return template_id
+
+    def update_transaction_template(self, template_id: int, **fields) -> None:
+        self.repo.update_transaction_template(template_id, **fields)
+        self.changed.emit()
+
+    def delete_transaction_template(self, template_id: int) -> None:
+        self.repo.delete_transaction_template(template_id)
+        self.changed.emit()
 
     # ------------------------------------------------------------ transactions
     def add_transaction(self, **fields) -> int:

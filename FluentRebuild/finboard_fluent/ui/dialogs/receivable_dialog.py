@@ -1,15 +1,12 @@
 """Receivable / payable editor."""
 
 from __future__ import annotations
+from ..fluent_controls import CheckBox, ComboBox, DateEdit, LineEdit
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
-    QLineEdit,
     QWidget,
 )
 
@@ -57,32 +54,32 @@ class ReceivableDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-        self.counterparty_input = QLineEdit()
+        self.counterparty_input = LineEdit()
         self.counterparty_input.setPlaceholderText(t("对方名称"))
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setPlaceholderText("0.00")
-        self.currency_combo = QComboBox()
+        self.currency_combo = ComboBox()
         for code, meta in CURRENCIES.items():
             self.currency_combo.addItem(f"{meta['symbol']}  {code} · {meta['name']}", code)
         self.currency_combo.setCurrentIndex(
             max(0, self.currency_combo.findData(service.currency))
         )
-        self.date_edit = QDateEdit(QDate.currentDate())
+        self.date_edit = DateEdit(QDate.currentDate())
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
-        self.due_check = QCheckBox(t("设置到期日"))
-        self.due_edit = QDateEdit(QDate.currentDate().addMonths(1))
+        self.due_check = CheckBox(t("设置到期日"))
+        self.due_edit = DateEdit(QDate.currentDate().addMonths(1))
         self.due_edit.setCalendarPopup(True)
         self.due_edit.setDisplayFormat("yyyy-MM-dd")
         self.due_edit.setEnabled(False)
         self.due_check.toggled.connect(self.due_edit.setEnabled)
-        self.account_combo = QComboBox()
+        self.account_combo = ComboBox()
         self.account_combo.addItem(t("不关联账户"), None)
         for account in service.repo.accounts():
             self.account_combo.addItem(
                 f"{account.name} · {account.currency}", account.id
             )
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注"))
         form.addRow(form_label(t("对方")), self.counterparty_input)
         form.addRow(form_label(t("金额")), self.amount_input)
@@ -122,9 +119,9 @@ class ReceivableDialog(QDialog):
                 counterparty=counterparty,
                 amount=amount,
                 currency=str(self.currency_combo.currentData() or "CNY"),
-                date=self.date_edit.date().toString("yyyy-MM-dd"),
+                date=self.date_edit.getDate().toString("yyyy-MM-dd"),
                 due_date=(
-                    self.due_edit.date().toString("yyyy-MM-dd")
+                    self.due_edit.getDate().toString("yyyy-MM-dd")
                     if self.due_check.isChecked()
                     else None
                 ),

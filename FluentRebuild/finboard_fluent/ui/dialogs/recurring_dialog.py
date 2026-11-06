@@ -1,17 +1,14 @@
 """Create or edit a recurring transaction rule."""
 
 from __future__ import annotations
+from ..fluent_controls import CheckBox, DateEdit, LineEdit, SpinBox
 
 from PySide6.QtCore import QDate, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -62,7 +59,7 @@ class RecurringDialog(QDialog):
         )
         layout.addLayout(header)
 
-        self.name_input = QLineEdit()
+        self.name_input = LineEdit()
         self.name_input.setPlaceholderText(t("例如：房租、工资、会员续费"))
         self.name_input.setMaxLength(60)
 
@@ -76,7 +73,7 @@ class RecurringDialog(QDialog):
         )
         self.kind_control.changed.connect(self._kind_changed)
 
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setObjectName("AmountInput")
         self.amount_input.setPlaceholderText("0.00")
         self.currency_combo = ComboBox()
@@ -102,7 +99,7 @@ class RecurringDialog(QDialog):
         self.frequency_combo = ComboBox()
         for label, value in FREQUENCIES:
             self.frequency_combo.addItem(t(label), value)
-        self.interval_spin = QSpinBox()
+        self.interval_spin = SpinBox()
         self.interval_spin.setRange(1, 365)
         self.interval_spin.setValue(1)
         self.interval_spin.setFixedWidth(74)
@@ -115,11 +112,11 @@ class RecurringDialog(QDialog):
         frequency_row.addWidget(self.interval_label)
         frequency_row.addStretch(1)
 
-        self.start_edit = QDateEdit(QDate.fromString(today_iso(), "yyyy-MM-dd"))
+        self.start_edit = DateEdit(QDate.fromString(today_iso(), "yyyy-MM-dd"))
         self.start_edit.setCalendarPopup(True)
         self.start_edit.setDisplayFormat("yyyy-MM-dd")
-        self.end_check = QCheckBox(t("设置结束日期"))
-        self.end_edit = QDateEdit(QDate.currentDate().addYears(1))
+        self.end_check = CheckBox(t("设置结束日期"))
+        self.end_edit = DateEdit(QDate.currentDate().addYears(1))
         self.end_edit.setCalendarPopup(True)
         self.end_edit.setDisplayFormat("yyyy-MM-dd")
         self.end_edit.setEnabled(False)
@@ -129,12 +126,12 @@ class RecurringDialog(QDialog):
         end_row.addWidget(self.end_check)
         end_row.addWidget(self.end_edit, 1)
 
-        self.payee_input = QLineEdit()
+        self.payee_input = LineEdit()
         self.payee_input.setPlaceholderText(t("例如：房东、公司、平台"))
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注"))
-        self.waive_check = QCheckBox(t("本次提现豁免手续费"))
-        self.active_check = QCheckBox(t("启用此规则"))
+        self.waive_check = CheckBox(t("本次提现豁免手续费"))
+        self.active_check = CheckBox(t("启用此规则"))
         self.active_check.setChecked(True)
 
         form = QFormLayout()
@@ -309,7 +306,7 @@ class RecurringDialog(QDialog):
             show_error(self.error, t("请选择转入账户"))
             return
         end_date = (
-            self.end_edit.date().toString("yyyy-MM-dd")
+            self.end_edit.getDate().toString("yyyy-MM-dd")
             if self.end_check.isChecked()
             else None
         )
@@ -325,7 +322,7 @@ class RecurringDialog(QDialog):
             fee_waived=self.waive_check.isChecked(),
             frequency=self.frequency_combo.currentData(),
             interval_count=self.interval_spin.value(),
-            start_date=self.start_edit.date().toString("yyyy-MM-dd"),
+            start_date=self.start_edit.getDate().toString("yyyy-MM-dd"),
             end_date=end_date,
             active=self.active_check.isChecked(),
             currency=self.currency_combo.currentData(),

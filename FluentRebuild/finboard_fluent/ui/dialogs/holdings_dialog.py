@@ -1,6 +1,7 @@
 """Holdings list and editor for investment accounts."""
 
 from __future__ import annotations
+from ..fluent_controls import LineEdit
 
 from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import (
@@ -10,7 +11,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from ...core.models import Account, Holding
 from ...core.money import format_cents, format_quantity, parse_quantity, parse_signed_amount
+from ...core.quotes import QuoteError
 from ...core.service import FinanceService
 from ...i18n import t
 from ..charts import DonutChart
@@ -64,25 +65,25 @@ class HoldingDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-        self.name_input = QLineEdit()
+        self.name_input = LineEdit()
         self.name_input.setPlaceholderText(t("例如：沪深300ETF、苹果"))
-        self.symbol_input = QLineEdit()
+        self.symbol_input = LineEdit()
         self.symbol_input.setPlaceholderText(t("可选，例如 510300、AAPL"))
-        self.quantity_input = QLineEdit()
+        self.quantity_input = LineEdit()
         self.quantity_input.setPlaceholderText(t("例如：1000 或 12.5"))
-        self.cost_input = QLineEdit()
+        self.cost_input = LineEdit()
         self.cost_input.setPlaceholderText(t("每股成本价"))
-        self.price_input = QLineEdit()
+        self.price_input = LineEdit()
         self.price_input.setPlaceholderText(t("当前市价"))
-        self.realized_input = QLineEdit()
+        self.realized_input = LineEdit()
         self.realized_input.setPlaceholderText(t("卖出后的累计已实现收益，可为负"))
-        self.dividends_input = QLineEdit()
+        self.dividends_input = LineEdit()
         self.dividends_input.setPlaceholderText(t("累计收到的现金分红"))
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注，例如：长期持有"))
-        self.asset_class_input = QLineEdit()
+        self.asset_class_input = LineEdit()
         self.asset_class_input.setPlaceholderText(t("例如：股票、债券、现金、另类"))
-        self.region_input = QLineEdit()
+        self.region_input = LineEdit()
         self.region_input.setPlaceholderText(t("例如：中国、美国、全球"))
 
         form.addRow(form_label(t("名称")), self.name_input)
@@ -248,7 +249,7 @@ class CashDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setObjectName("AmountInput")
         self.amount_input.setPlaceholderText("0.00")
         self.amount_input.setText(format_cents(account.cash_balance, ""))
@@ -396,6 +397,11 @@ class HoldingsDialog(QDialog):
         )
         root.addWidget(self.empty)
 
+        self.quote_label = QLabel()
+        self.quote_label.setProperty("role", "muted")
+        self.quote_label.setWordWrap(True)
+        root.addWidget(self.quote_label)
+
         self.error = error_label()
         root.addWidget(self.error)
         actions = QHBoxLayout()
@@ -408,7 +414,9 @@ class HoldingsDialog(QDialog):
         self.cash_button = ThemedButton(t("调整现金"), "secondary", "wallet")
         self.cash_button.clicked.connect(self._adjust_cash)
         self.trades_button = ThemedButton(t("投资流水"), "secondary", "list")
+        self.quote_button = ThemedButton(t("更新行情"), "secondary", "refresh")
         self.sync_button = ThemedButton(t("按市值校准账户"), "soft", "refresh")
+        self.quote_button.clicked.connect(self._refresh_quotes)
         self.sync_button.clicked.connect(self._sync)
         self.trades_button.clicked.connect(self._open_trades)
         self.close_button = ThemedButton(t("关闭"), "secondary")
@@ -419,6 +427,7 @@ class HoldingsDialog(QDialog):
         actions.addStretch(1)
         actions.addWidget(self.cash_button)
         actions.addWidget(self.trades_button)
+        actions.addWidget(self.quote_button)
         actions.addWidget(self.sync_button)
         actions.addWidget(self.close_button)
         root.addLayout(actions)
@@ -476,6 +485,23 @@ class HoldingsDialog(QDialog):
         dialog.exec()
         self.refresh()
 
+    def _refresh_quotes(self) -> None:
+        try:
+            quotes = self.service.refresh_quotes()
+        except QuoteError as exc:
+            ConfirmDialog.alert(self, t("行情更新失败"), str(exc))
+            return
+        except Exception as exc:
+            ConfirmDialog.alert(self, t("行情更新失败"), str(exc))
+            return
+        self.refresh()
+        if quotes:
+            window = self.parent()
+            if hasattr(window, "notify"):
+                window.notify(t("已更新 {count} 个行情", count=len(quotes)))
+        else:
+            ConfirmDialog.alert(self, t("没有可更新的行情"), t("请先为持仓填写股票或基金代码。"))
+
     def _sync(self) -> None:
         try:
             self.service.sync_holdings_value(self.account.id)
@@ -522,6 +548,17 @@ class HoldingsDialog(QDialog):
             )
         )
         self._update_allocation(rows, symbol)
+        quotes, fetched_at = self.service.quote_cache()
+        if fetched_at:
+            self.quote_label.setText(
+                t(
+                    "行情更新于 {time} · {count} 个代码（腾讯行情）",
+                    time=fetched_at[:16].replace("T", " "),
+                    count=len(quotes),
+                )
+            )
+        else:
+            self.quote_label.setText(t("尚未更新行情；可手动更新或到设置中开启自动更新"))
         rate = self.service.portfolio_xirr(self.account.id)
         self.xirr_value.setText(
             "—" if rate is None else f"{rate * 100:.2f}%"

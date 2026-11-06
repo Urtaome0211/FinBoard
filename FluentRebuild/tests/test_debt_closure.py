@@ -32,7 +32,7 @@ class DebtClosureTest(unittest.TestCase):
 
     def test_schema_has_debt_payments(self) -> None:
         version = self.db.conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 17)
+        self.assertEqual(version, 18)
         table = self.db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='debt_payments'"
         ).fetchone()

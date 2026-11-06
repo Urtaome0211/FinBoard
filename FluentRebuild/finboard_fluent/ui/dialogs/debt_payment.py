@@ -1,18 +1,15 @@
 """Repayment recording and history for loans and credit cards."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, DateEdit, LineEdit, TableWidget
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -68,26 +65,25 @@ class DebtPaymentDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setPlaceholderText("0.00")
         self.amount_input.textChanged.connect(self._update_preview)
         form.addRow(form_label(t("还款金额")), self.amount_input)
 
-        self.date_edit = QDateEdit(QDate.currentDate())
+        self.date_edit = DateEdit(QDate.currentDate())
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         form.addRow(form_label(t("还款日期")), self.date_edit)
 
-        self.source_combo = QComboBox()
+        self.source_combo = ComboBox()
         self.source_combo.setMinimumWidth(300)
         self._load_sources()
         form.addRow(form_label(t("资金来源")), self.source_combo)
 
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注"))
         form.addRow(form_label(t("备注")), self.note_input)
         root.addLayout(form)
-        self.amount_input.setText(f"{self._default_amount() / 100:.2f}")
 
         self.preview = QLabel()
         self.preview.setWordWrap(True)
@@ -100,7 +96,12 @@ class DebtPaymentDialog(QDialog):
         self.save_button = footer.itemAt(footer.count() - 1).widget()
         self.save_button.clicked.connect(self._save)
         root.addLayout(footer)
+        self.amount_input.setText(f"{self._default_amount() / 100:.2f}")
         self._update_preview()
+        if self.debt.outstanding <= 0:
+            self.amount_input.setReadOnly(True)
+            self.save_button.setEnabled(False)
+            self.preview.setText(t("这笔负债已经还清"))
 
     def _default_amount(self) -> int:
         if self.debt.is_loan:
@@ -169,7 +170,7 @@ class DebtPaymentDialog(QDialog):
                 self.account.id,
                 amount=amount,
                 source_account_id=int(source_id),
-                paid_on=self.date_edit.date().toString("yyyy-MM-dd"),
+                paid_on=self.date_edit.getDate().toString("yyyy-MM-dd"),
                 note=self.note_input.text().strip(),
             )
         except ValueError as exc:
@@ -209,12 +210,12 @@ class DebtPaymentsDialog(QDialog):
         self.summary.setProperty("role", "muted")
         root.addWidget(self.summary)
 
-        self.table = QTableWidget(0, 5)
+        self.table = TableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             [t("日期"), t("还款"), t("本金"), t("利息"), t("备注")]
         )
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         root.addWidget(self.table, 1)
 

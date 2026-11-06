@@ -1,16 +1,13 @@
 """Loan and credit-card profile editor."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, DateEdit, LineEdit, SpinBox
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QLabel,
-    QLineEdit,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -58,16 +55,16 @@ class DebtDialog(QDialog):
         loan_form = QFormLayout(self.loan_form)
         loan_form.setHorizontalSpacing(18)
         loan_form.setVerticalSpacing(12)
-        self.principal_input = QLineEdit()
+        self.principal_input = LineEdit()
         self.principal_input.setPlaceholderText("0.00")
-        self.rate_input = QLineEdit("0.00")
-        self.term_input = QSpinBox()
+        self.rate_input = LineEdit("0.00")
+        self.term_input = SpinBox()
         self.term_input.setRange(1, 720)
         self.term_input.setValue(12)
-        self.start_edit = QDateEdit(QDate.currentDate())
+        self.start_edit = DateEdit(QDate.currentDate())
         self.start_edit.setCalendarPopup(True)
         self.start_edit.setDisplayFormat("yyyy-MM-dd")
-        self.method_combo = QComboBox()
+        self.method_combo = ComboBox()
         self.method_combo.addItem(t("等额本息"), "equal_payment")
         self.method_combo.addItem(t("等额本金"), "equal_principal")
         loan_form.addRow(form_label(t("贷款本金")), self.principal_input)
@@ -81,16 +78,16 @@ class DebtDialog(QDialog):
         credit_form = QFormLayout(self.credit_form)
         credit_form.setHorizontalSpacing(18)
         credit_form.setVerticalSpacing(12)
-        self.limit_input = QLineEdit()
+        self.limit_input = LineEdit()
         self.limit_input.setPlaceholderText("0.00")
-        self.credit_rate_input = QLineEdit("0.00")
-        self.billing_input = QSpinBox()
+        self.credit_rate_input = LineEdit("0.00")
+        self.billing_input = SpinBox()
         self.billing_input.setRange(1, 28)
         self.billing_input.setValue(5)
-        self.due_input = QSpinBox()
+        self.due_input = SpinBox()
         self.due_input.setRange(1, 28)
         self.due_input.setValue(20)
-        self.min_input = QLineEdit("10.00")
+        self.min_input = LineEdit("10.00")
         credit_form.addRow(form_label(t("信用额度")), self.limit_input)
         credit_form.addRow(form_label(t("年利率")), self.credit_rate_input)
         credit_form.addRow(form_label(t("账单日")), self.billing_input)
@@ -98,7 +95,7 @@ class DebtDialog(QDialog):
         credit_form.addRow(form_label(t("最低还款比例")), self.min_input)
         root.addWidget(self.credit_form)
 
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注"))
         note_row = QFormLayout()
         note_row.setHorizontalSpacing(18)
@@ -181,7 +178,7 @@ class DebtDialog(QDialog):
                     principal=principal,
                     annual_rate_bp=rate,
                     term_months=self.term_input.value(),
-                    start_date=self.start_edit.date().toString("yyyy-MM-dd"),
+                    start_date=self.start_edit.getDate().toString("yyyy-MM-dd"),
                     payment_method=str(self.method_combo.currentData()),
                     note=self.note_input.text().strip(),
                 )

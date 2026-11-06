@@ -18,6 +18,7 @@ from .holdings_dialog import HoldingDialog, HoldingsDialog
 from .investment_trade import InvestmentTradesDialog, TradeDialog
 from .metadata_dialog import MetadataDialog
 from .planned_dialog import PlannedDialog
+from .quick_entry import QuickEntryDialog
 from .receivable_dialog import ReceivableDialog
 from .reconcile_dialog import ReconcileDialog
 from .recurring_dialog import RecurringDialog
@@ -48,6 +49,7 @@ __all__ = [
     "MetadataDialog",
     "PayoffDialog",
     "PlannedDialog",
+    "QuickEntryDialog",
     "ReceivableDialog",
     "ReconcileDialog",
     "RecurringDialog",

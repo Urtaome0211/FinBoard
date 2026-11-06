@@ -29,7 +29,7 @@ class CoreModelTests(unittest.TestCase):
 
     def test_schema_15_tables(self) -> None:
         version = self.db.conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 17)
+        self.assertEqual(version, 18)
         names = {
             row[0]
             for row in self.db.conn.execute(

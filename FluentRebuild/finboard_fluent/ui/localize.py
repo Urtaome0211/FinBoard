@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from qfluentwidgets import ComboBox as FluentComboBox, DatePicker
+
 from ..i18n import is_english, t
 
 
@@ -47,6 +49,15 @@ def _skipped(widget: QWidget) -> bool:
     return False
 
 
+def _inside(widget: QWidget, kind: type[QWidget]) -> bool:
+    node: QWidget | None = widget
+    while node is not None:
+        if isinstance(node, kind):
+            return True
+        node = node.parentWidget()
+    return False
+
+
 def localize_widgets(root: QWidget) -> None:
     """Translate labels, buttons, hints and tooltips below *root*."""
     if not is_english():
@@ -55,6 +66,14 @@ def localize_widgets(root: QWidget) -> None:
     widgets = [root, *root.findChildren(QWidget)]
     for widget in widgets:
         if _skipped(widget):
+            continue
+        if _inside(widget, DatePicker):
+            continue
+        if isinstance(widget, FluentComboBox):
+            for index in range(widget.count()):
+                widget.setItemText(index, _translated(widget.itemText(index)))
+            if widget.toolTip():
+                widget.setToolTip(_translated(widget.toolTip()))
             continue
         if isinstance(widget, QWidget) and widget.windowTitle():
             widget.setWindowTitle(_translated(widget.windowTitle()))

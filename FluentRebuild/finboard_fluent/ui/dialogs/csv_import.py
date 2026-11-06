@@ -1,20 +1,17 @@
 """CSV import dialog with column mapping and reusable rules."""
 
 from __future__ import annotations
+from ..fluent_controls import CheckBox, ComboBox, LineEdit, PushButton
 
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QPushButton,
     QWidget,
 )
 
@@ -103,7 +100,7 @@ class CsvImportDialog(QDialog):
 
         preset_row = QHBoxLayout()
         preset_row.addWidget(QLabel(t("导入预设")))
-        self.preset_combo = QComboBox()
+        self.preset_combo = ComboBox()
         self.preset_combo.addItem(t("自动识别"), None)
         for key, preset in IMPORT_PRESETS.items():
             self.preset_combo.addItem(t(preset["label"]), key)
@@ -111,7 +108,7 @@ class CsvImportDialog(QDialog):
         preset_row.addWidget(self.preset_combo)
         preset_row.addSpacing(12)
         preset_row.addWidget(QLabel(t("默认账户")))
-        self.default_account_combo = QComboBox()
+        self.default_account_combo = ComboBox()
         self.default_account_combo.addItem(t("使用文件中的账户"), None)
         for account in self.service.repo.accounts():
             self.default_account_combo.addItem(
@@ -121,10 +118,10 @@ class CsvImportDialog(QDialog):
         layout.addLayout(preset_row)
 
         rule_row = QHBoxLayout()
-        self.rule_combo = QComboBox()
+        self.rule_combo = ComboBox()
         self.rule_combo.setMinimumWidth(150)
         self.rule_combo.currentIndexChanged.connect(self._rule_changed)
-        self.name_input = QLineEdit()
+        self.name_input = LineEdit()
         self.name_input.setMinimumWidth(180)
         self.name_input.setPlaceholderText(t("规则名称，例如：招商银行账单"))
         save_rule = ThemedButton("保存为规则", "soft", "database")
@@ -141,14 +138,14 @@ class CsvImportDialog(QDialog):
         columns = QHBoxLayout(self.mapping_widget)
         columns.setContentsMargins(0, 0, 0, 0)
         columns.setSpacing(24)
-        self.mapping_combos: dict[str, QComboBox] = {}
+        self.mapping_combos: dict[str, ComboBox] = {}
         for column_index, fields in enumerate((CSV_FIELDS[:5], CSV_FIELDS[5:])):
             form = QFormLayout()
             form.setContentsMargins(0, 0, 0, 0)
             form.setHorizontalSpacing(12)
             form.setVerticalSpacing(8)
             for field in fields:
-                combo = QComboBox()
+                combo = ComboBox()
                 combo.addItem(t("（不使用）"), "")
                 combo.setMinimumWidth(205)
                 form.addRow(t(FIELD_LABELS[field]), combo)
@@ -156,7 +153,7 @@ class CsvImportDialog(QDialog):
             columns.addLayout(form, 1)
         layout.addWidget(self.mapping_widget)
 
-        self.dedup_check = QCheckBox(t("跳过重复记录（按日期、类型、金额、账户、对方）"))
+        self.dedup_check = CheckBox(t("跳过重复记录（按日期、类型、金额、账户、对方）"))
         self.dedup_check.setChecked(True)
         layout.addWidget(self.dedup_check)
 

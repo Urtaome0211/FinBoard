@@ -1,17 +1,14 @@
 """Create or edit a single income / expense / transfer record."""
 
 from __future__ import annotations
+from ..fluent_controls import CheckBox, ComboBox, DateEdit, LineEdit
 
 from PySide6.QtCore import QDate, QSettings, Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
 )
 
 from ...core.fees import withdrawal_rule
@@ -20,7 +17,8 @@ from ...core.models import Transaction, TransactionFilter
 from ...core.money import CURRENCIES, parse_amount
 from ...core.rates import RateError
 from ...core.service import FinanceService
-from ..widgets import SegmentedControl
+from ..widgets import SegmentedControl, ThemedButton
+from .prompt import ask_text
 from .common import (
     color_icon,
     dialog_footer,
@@ -53,6 +51,7 @@ class TransactionDialog(QDialog):
         self._rule_tags: list[str] = []
         self._category_touched = bool(transaction or duplicate)
         self._applying_rule = False
+        self._applying_template = False
         self.setWindowTitle(
             t("编辑记录")
             if transaction
@@ -98,18 +97,33 @@ class TransactionDialog(QDialog):
         self.kind_control.changed.connect(self._kind_changed)
         layout.addWidget(self.kind_control)
 
+        template_row = QHBoxLayout()
+        template_row.setSpacing(8)
+        template_label = QLabel(t("模板"))
+        template_label.setProperty("role", "muted")
+        self.template_combo = ComboBox()
+        self.template_combo.setProperty("i18nSkip", True)
+        self.template_combo.setMinimumWidth(260)
+        self.template_combo.currentIndexChanged.connect(self._template_changed)
+        self.template_save = ThemedButton(t("保存为模板"), "secondary")
+        self.template_save.clicked.connect(self._save_template)
+        template_row.addWidget(template_label, 0)
+        template_row.addWidget(self.template_combo, 1)
+        template_row.addWidget(self.template_save, 0)
+        layout.addLayout(template_row)
+
         amount_row = QHBoxLayout()
         amount_row.setSpacing(8)
         self.amount_symbol = QLabel(service.symbol)
         self.amount_symbol.setProperty("role", "muted")
         self.amount_symbol.setStyleSheet("font-size: 24px; font-weight: 600;")
         self.amount_symbol.setMinimumWidth(30)
-        self.amount_input = QLineEdit()
+        self.amount_input = LineEdit()
         self.amount_input.setObjectName("AmountInput")
         self.amount_input.setPlaceholderText("0.00")
         self.amount_input.setMaxLength(20)
         self.amount_input.setClearButtonEnabled(True)
-        self.currency_combo = QComboBox()
+        self.currency_combo = ComboBox()
         self.currency_combo.setFixedWidth(190)
         for code, meta in CURRENCIES.items():
             self.currency_combo.addItem(
@@ -131,27 +145,27 @@ class TransactionDialog(QDialog):
             QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
         )
 
-        self.date_edit = QDateEdit()
+        self.date_edit = DateEdit()
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.date_edit.setDate(QDate.currentDate())
         self.form.addRow(form_label(t("日期")), self.date_edit)
 
-        self.account_combo = QComboBox()
+        self.account_combo = ComboBox()
         self.account_combo.setMinimumWidth(240)
         self.account_combo.setProperty("i18nSkip", True)
         self.form.addRow(form_label(t("来源账户")), self.account_combo)
 
         self.category_label = form_label(t("分类"))
-        self.category_combo = QComboBox()
+        self.category_combo = ComboBox()
         self.form.addRow(self.category_label, self.category_combo)
 
-        self.refund_check = QCheckBox(t("这是一笔退款（关联原支出）"))
+        self.refund_check = CheckBox(t("这是一笔退款（关联原支出）"))
         self.refund_check.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refund_check.toggled.connect(self._refund_toggled)
         self.form.addRow("", self.refund_check)
         self.refund_label = form_label(t("原支出"))
-        self.refund_combo = QComboBox()
+        self.refund_combo = ComboBox()
         self.refund_combo.setMinimumWidth(320)
         self.refund_combo.setProperty("i18nSkip", True)
         self.form.addRow(self.refund_label, self.refund_combo)
@@ -160,12 +174,12 @@ class TransactionDialog(QDialog):
         self.refund_check.hide()
 
         self.to_label = form_label(t("转入账户"))
-        self.to_combo = QComboBox()
+        self.to_combo = ComboBox()
         self.to_combo.setProperty("i18nSkip", True)
         self.form.addRow(self.to_label, self.to_combo)
 
         self.to_amount_label = form_label(t("到账金额"))
-        self.to_amount_input = QLineEdit()
+        self.to_amount_input = LineEdit()
         self.to_amount_input.setPlaceholderText(t("留空则按当日汇率自动折算"))
         self.to_amount_input.setMaxLength(20)
         self.form.addRow(self.to_amount_label, self.to_amount_input)
@@ -178,18 +192,18 @@ class TransactionDialog(QDialog):
         self.fee_label.hide()
         self.fee_value.hide()
 
-        self.waive_check = QCheckBox(t("本次豁免手续费"))
+        self.waive_check = CheckBox(t("本次豁免手续费"))
         self.waive_check.setCursor(Qt.CursorShape.PointingHandCursor)
         self.waive_check.toggled.connect(lambda _checked: self._update_preview())
         self.form.addRow("", self.waive_check)
         self.waive_check.hide()
 
-        self.payee_input = QLineEdit()
+        self.payee_input = LineEdit()
         self.payee_input.setPlaceholderText(t("例如：盒马鲜生、房东、公司"))
         self.payee_input.setMaxLength(60)
         self.form.addRow(form_label(t("对方")), self.payee_input)
 
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注，例如：周末聚餐"))
         self.note_input.setMaxLength(200)
         self.form.addRow(form_label(t("备注")), self.note_input)
@@ -230,6 +244,7 @@ class TransactionDialog(QDialog):
         self._load_accounts()
         self._load_categories()
         self._load_targets()
+        self._load_templates()
         if transaction:
             self._fill(transaction)
         elif duplicate:
@@ -262,6 +277,111 @@ class TransactionDialog(QDialog):
             self.account_combo.currentData() or 0, include_archived=True
         ) if self.account_combo.currentData() else None
         return account.currency if account else "CNY"
+
+    # ---------------------------------------------------------------- templates
+    def _load_templates(self, select_id: int | None = None) -> None:
+        self.template_combo.blockSignals(True)
+        self.template_combo.clear()
+        self.template_combo.addItem(t("选择模板…"), None)
+        for template in self.service.transaction_templates():
+            self.template_combo.addItem(template.name, template.id)
+        if select_id is not None:
+            index = self.template_combo.findData(select_id)
+            if index >= 0:
+                self.template_combo.setCurrentIndex(index)
+        self.template_combo.blockSignals(False)
+
+    def _template_changed(self, _index: int) -> None:
+        if self._applying_template:
+            return
+        template_id = self.template_combo.currentData()
+        if not template_id:
+            return
+        try:
+            template = self.service.get_transaction_template(int(template_id))
+        except ValueError as exc:
+            show_error(self.error, str(exc))
+            return
+        self._applying_template = True
+        try:
+            self.kind_control.set_value(template.kind, emit=False)
+            self._load_categories()
+            self._load_targets()
+            self._kind_changed(template.kind, initial=True)
+            self.amount_input.setText(
+                f"{template.amount / 100:.2f}" if template.amount else ""
+            )
+            currency_index = self.currency_combo.findData(template.currency)
+            if currency_index >= 0:
+                self.currency_combo.setCurrentIndex(currency_index)
+            if template.account_id is not None:
+                account_index = self.account_combo.findData(template.account_id)
+                if account_index >= 0:
+                    self.account_combo.setCurrentIndex(account_index)
+            if template.category_id is not None:
+                category_index = self.category_combo.findData(template.category_id)
+                if category_index >= 0:
+                    self.category_combo.setCurrentIndex(category_index)
+            if template.to_account_id is not None:
+                target_index = self.to_combo.findData(template.to_account_id)
+                if target_index >= 0:
+                    self.to_combo.setCurrentIndex(target_index)
+            self.payee_input.setText(template.payee)
+            self.note_input.setText(template.note)
+            if not self.transaction:
+                self.date_edit.setDate(QDate.currentDate())
+            self.refund_check.setChecked(False)
+            self._category_touched = True
+            self._update_preview()
+        finally:
+            self._applying_template = False
+
+    def _save_template(self) -> None:
+        try:
+            amount = (
+                parse_amount(self.amount_input.text())
+                if self.amount_input.text().strip()
+                else 0
+            )
+        except ValueError as exc:
+            show_error(self.error, str(exc))
+            return
+        default_name = (
+            self.payee_input.text().strip()
+            or self.category_combo.currentText().strip()
+            or t("模板")
+        )
+        name, accepted = ask_text(
+            self,
+            title=t("保存为模板"),
+            label=t("模板名称"),
+            default=default_name,
+        )
+        if not accepted:
+            return
+        kind = self.kind_control.value()
+        try:
+            template_id = self.service.add_transaction_template(
+                name.strip(),
+                kind=kind,
+                amount=amount,
+                currency=self.currency_combo.currentData() or "CNY",
+                category_id=(
+                    self.category_combo.currentData()
+                    if kind != "transfer"
+                    else None
+                ),
+                account_id=self.account_combo.currentData(),
+                to_account_id=(
+                    self.to_combo.currentData() if kind == "transfer" else None
+                ),
+                payee=self.payee_input.text().strip(),
+                note=self.note_input.text().strip(),
+            )
+        except ValueError as exc:
+            show_error(self.error, str(exc))
+            return
+        self._load_templates(template_id)
 
     # ------------------------------------------------------------------
     def _load_accounts(self) -> None:
@@ -483,7 +603,7 @@ class TransactionDialog(QDialog):
             self._set_preview(t("金额格式有误"), "error")
             return
         currency = self.currency_combo.currentData() or "CNY"
-        day = self.date_edit.date().toString("yyyy-MM-dd")
+        day = self.date_edit.getDate().toString("yyyy-MM-dd")
         parts: list[str] = []
         try:
             account = self.service.repo.get_account(
@@ -685,7 +805,7 @@ class TransactionDialog(QDialog):
                 show_error(self.error, t("请先在“分类”页添加一个分类"))
                 return
         fields = dict(
-            date=self.date_edit.date().toString("yyyy-MM-dd"),
+            date=self.date_edit.getDate().toString("yyyy-MM-dd"),
             kind=kind,
             amount=amount,
             currency=self.currency_combo.currentData() or "CNY",

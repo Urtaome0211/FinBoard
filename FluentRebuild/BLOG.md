@@ -277,7 +277,7 @@ if item is not None:
 2. `set_language("en")` 后导航显示 Overview/Settings，标题栏按钮显示 Add transaction；
 3. `set_theme("dark")` 后页面仍然可切换，不崩溃。
 
-5.0 初次交付时合计 **135 tests OK**；5.1 为 **158 tests OK**。
+5.0 初次交付时合计 **135 tests OK**；5.1 为 **158 tests OK**；5.2 为 **171 tests OK**；5.3 为 **173 tests OK**。
 
 ### 7.2 页面与对话框冒烟
 
@@ -340,7 +340,7 @@ hiddenimports += ["qframelesswindow", "darkdetect", "PySide6.QtSvg"]
 - 11 类对话框可构造；
 - 亮/暗主题、中/英双语；
 - 托盘、提醒、快捷键、撤销、退款、复制上一笔保留；
-- 158 个测试通过；
+- 173 个测试通过；
 - Windows one-dir 包可运行。
 
 没有做：
@@ -425,12 +425,91 @@ def repair_indexes(db):
 4. **UI 复用不等于不测**。旧 QSS 对话框在新壳里仍要构造、截图、跑交互冒烟。
 5. **退出路径也要测**。`--smoke-test` 的 1200ms 退出和汇率刷新线程撞在一起，Windows 上表现为 exit 127（`0xC0000409`），日志里只有一句 `QThread: Destroyed while thread is still running`。修复不是“把线程 wait 一下”这么简单：新增 `MainWindow.shutdown()` 统一停线程，smoke 模式下直接禁用网络刷新，保证测试快且确定。
 
-## 十二、结语
+## 十二、5.2：行情、模板与快速记账
+
+5.2 的三个需求看起来是“小功能”，但它们分别代表了三种不同的复杂度。
+
+### 12.1 行情：网络、解析和缓存要分开
+
+行情的第一版把 HTTP、GBK 解析、数据库更新和 UI 刷新放在同一条调用链里。结果是：网络一慢，界面就卡；刷新失败还会把“没有行情”误报成错误。最终拆成三层：
+
+- `core/quotes.py`：只做代码归一、腾讯接口请求和 GBK 响应解析，返回 `Quote`。
+- `Service`：把行情写入持仓、写缓存、发 `changed`；UI 线程只做展示。
+- `QThread`：启动时或手动刷新时，网络请求在后台线程执行，失败静默保留旧价格。
+
+一个容易忽略的细节是**腾讯接口返回的是 GBK**，不是 UTF-8；另一个是价格单位是“元”，而数据库统一用“分”。这两个转换只要有一个漏掉，界面就会显示乱码或 100 倍误差。
+
+测试里还踩了一个 Qt 的坑：用 `QTest.qWait()` 等后台线程时，GIL 不释放，线程看起来永远不结束；换成 `processEvents() + sleep()` 才能真实验证。这不是业务 bug，但会浪费很多排查时间。
+
+### 12.2 模板：把“重复录入”变成数据结构
+
+模板不是简单记住上一次输入，而是一张独立的 `transaction_templates` 表：名称、类型、金额、币种、分类、账户、转入账户、对方、备注。记账对话框顶部多一个模板下拉，选中后一次性填表，日期改为今天。
+
+模板的校验比想象中多：类型必须是支出/收入/转账；金额不能为负；分类必须和类型匹配；转账不能带分类；账户不能是系统自动创建的定期存款账户；转入账户不能和转出账户相同。这些规则和普通交易保持一致，否则模板会成为一个“绕过校验”的入口。
+
+### 12.3 快速记账：全局快捷键是平台能力，不是 Qt 能力
+
+Qt 没有跨平台的全局快捷键。Windows 下用 `RegisterHotKey` + `QAbstractNativeEventFilter`，注册 `Ctrl+Alt+N`；失败时回退到应用内 `QShortcut`。这样即使快捷键被其他软件占用，应用仍然可用。
+
+快速记账窗口只保留金额、账户、分类、对方、日期、备注，回车即保存；它复用自动分类规则和“上次账户/分类”，但不复制完整记账对话框的退款、拆分、手续费等复杂字段。**快速录入不是完整记账的替代品**，而是把最高频的路径缩短到 3 个字段。
+
+这一轮还修了一个小但典型的问题：账户下拉的余额用了 `CNY5,000.00`，而不是 `¥5,000.00`。原因是 `format_cents` 的第二个参数是“符号”，不是“币种代码”；这类显示问题很难靠单元测试发现，只能靠截图和真实数据。
+
+### 12.4 这一轮的边界
+
+5.2 没有做：行情历史 K 线、自动交易、自由报表设计器、跨平台全局快捷键。它们都不是“再写一个按钮”能解决的，应该作为独立版本立项。
+
+## 十三、5.3：把控件也换成 Fluent
+
+5.2 的界面是“Fluent 外壳 + 5.0 QSS 内页”的混合体。5.3 的目标是把控件层也换掉，同时修复用户报告的一个主题问题：切到深色后，侧边栏仍然发白。
+
+### 13.1 深色侧栏：动画和 Mica 叠在一起
+
+排查发现 `FluentWindow` 继承 `BackgroundAnimationWidget`。主题切换时，`backgroundColorAni` 会用 120ms 把背景从旧色过渡到新色；真实 Windows 上又启用了 Mica，`_normalBackgroundColor()` 返回透明色，导航和标题栏在动画期间就露出白底。
+
+修复分三步：
+
+1. `setTheme` / `setThemeColor` 后立即 `backgroundColorAni.stop()`；
+2. 关闭 Mica，直接设置纯色背景（暗 `#202020`、亮 `#F0F4F9`）；
+3. 把导航滚动区设为透明，再 `repaint()` 导航和标题栏。
+
+这样切换是同步的，不再依赖动画结束。离屏截图和真实窗口的像素验证都确认导航立即变深。
+
+### 13.2 兼容层，而不是重写 13 个页面
+
+页面和对话框里有 100 多处 `QLineEdit` / `QComboBox` / `QDateEdit` / `QTableWidget`。逐页重写风险太高，所以新增 `ui/fluent_controls.py` 做薄兼容层：
+
+- `LineEdit` 接受 `(text, parent)`；
+- `ComboBox` 包装 qfluentwidgets `ComboBox`，兼容原有 `addItem(text, data)` / `addItem(icon, text, data)`；
+- `DateEdit` 包装 `DatePicker`，兼容 `setDate` / `getDate` / `dateChanged` / `setCalendarPopup` / `setDisplayFormat`；
+- `TableWidget` 包装 Fluent 表格，保留行列构造；
+- `CheckBox`、`PushButton`、`PrimaryPushButton`、`SpinBox`、`ListWidget` 直接转出。
+
+然后批量替换 import，保留页面业务代码不变。`widgets.py` 的卡片、页面、标题、搜索框、按钮、图标按钮、分段控件也改用 Fluent 组件。图表继续自绘，因为 qfluentwidgets 免费版没有等价图表控件。
+
+### 13.3 两个 API 坑
+
+**DatePicker 的 `date` 是属性，不是方法。** 旧代码大量调用 `.date()`，替换后报 `QDate object is not callable`；批量改成 `.getDate()`。
+
+**`setDisplayFormat()` 会重置 DatePicker 的日期。** 报表区间一开始显示 `year / month / day` 占位符，宽度加到 300 也没用；原因是构造后再调 `setDisplayFormat`，内部 `setDateFormat` 把日期清空了。修复是保存当前日期、设置格式、再 `setDate()` 恢复。交易对话框因为后续会重新 `setDate`，所以没有暴露。
+
+### 13.4 结果
+
+- 13 个页面、29 个对话框全部用 Fluent 控件构造；
+- 暗色/亮色切换同步生效，侧边栏不再发白；
+- 173 个测试通过；
+- 页面级 QSS 仅保留卡片、排版和图表调色板，通用输入控件交给 Fluent 自绘。
+
+`QInputDialog` 也换成了 `ui/dialogs/prompt.py` 的 `TextPromptDialog`，用于模板命名和报表区间预设命名；系统文件选择器仍保留原生对话框。
+
+这一轮也说明：Fluent 化最难的不是“换按钮”，而是 Qt 控件 API 与 Fluent 控件的语义差异。兼容层比全量重写更适合这种已有大量业务代码的项目。
+
+## 十四、结语
 
 这次重构证明：对一个已经稳定的桌面应用，**只换壳**是可行的，而且成本远低于重写。真正花时间的不是 `FluentWindow` 本身，而是那些“壳和页面之间”的胶水：导航状态、主题同步、语言刷新、托盘关闭、打包资源；而 5.1 的四项功能说明，壳稳定之后，真正难的是数据迁移和金额口径。
 
-如果后续要继续 Fluent 化，建议按“对话框 → 表单控件 → 图表容器”的顺序推进，每步都保留 158 个测试作为回归底线。
+如果后续继续深化，建议把图表容器、系统原生文件对话框和自定义弹窗也逐步统一，每一步都保留 173 个测试作为回归底线。
 
 ---
 
-*本文对应的代码在 `FluentRebuild/`，版本 5.1.0；未上传 GitHub。*
+*本文对应的代码在 `FluentRebuild/`，版本 5.3.0；未上传 GitHub。*

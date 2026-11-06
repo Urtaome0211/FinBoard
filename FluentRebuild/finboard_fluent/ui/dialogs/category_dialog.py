@@ -1,6 +1,7 @@
 """Create or edit a transaction category."""
 
 from __future__ import annotations
+from ..fluent_controls import LineEdit, PushButton
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -10,8 +11,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QPushButton,
 )
 
 from ...core.models import DEFAULT_COLORS, Category
@@ -44,7 +43,7 @@ class CategoryDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(470)
         self.setSizeGripEnabled(False)
-        self._buttons: list[QPushButton] = []
+        self._buttons: list[PushButton] = []
 
         layout = root_layout(self)
         header, _ = dialog_header(
@@ -77,7 +76,7 @@ class CategoryDialog(QDialog):
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(13)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        self.name_input = QLineEdit()
+        self.name_input = LineEdit()
         self.name_input.setPlaceholderText("例如：宠物、咖啡、房租")
         self.name_input.setMaxLength(20)
         form.addRow(form_label("名称"), self.name_input)
@@ -98,19 +97,19 @@ class CategoryDialog(QDialog):
         self.color_group = QButtonGroup(self)
         self.color_group.setExclusive(True)
         for index, color in enumerate(palette_colors):
-            button = QPushButton()
+            button = PushButton()
             button.setCheckable(True)
             button.setFixedSize(32, 32)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setToolTip(color)
             button.setAccessibleName(f"颜色 {color}")
             button.setStyleSheet(
-                "QPushButton {"
+                "PushButton {"
                 f"background-color: {color}; border: 2px solid transparent;"
                 "border-radius: 8px; padding: 0;"
                 "}"
-                f"QPushButton:hover {{ border: 2px solid {palette.border_strong}; }}"
-                f"QPushButton:checked {{ border: 3px solid {palette.text}; }}"
+                f"PushButton:hover {{ border: 2px solid {palette.border_strong}; }}"
+                f"PushButton:checked {{ border: 3px solid {palette.text}; }}"
             )
             self.color_group.addButton(button, index)
             self._buttons.append(button)

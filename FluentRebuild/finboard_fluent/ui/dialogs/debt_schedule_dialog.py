@@ -1,16 +1,14 @@
 """Amortization schedule and debt payoff planner."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, LineEdit, TableWidget
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -75,12 +73,12 @@ class DebtScheduleDialog(QDialog):
         summary.addStretch(1)
         root.addLayout(summary)
 
-        table = QTableWidget(len(schedule), 6)
+        table = TableWidget(len(schedule), 6)
         table.setHorizontalHeaderLabels(
             [t("期数"), t("日期"), t("月供"), t("本金"), t("利息"), t("剩余本金")]
         )
         table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         for row, item in enumerate(schedule):
             values = (
@@ -101,6 +99,14 @@ class DebtScheduleDialog(QDialog):
                 table.setItem(row, column, cell)
         root.addWidget(table, 1)
         self._add_close(root)
+
+    def _add_close(self, root: QVBoxLayout) -> None:
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        close = ThemedButton(t("关闭"), "secondary")
+        close.clicked.connect(self.accept)
+        footer.addWidget(close)
+        root.addLayout(footer)
 
 
 class PayoffDialog(QDialog):
@@ -127,11 +133,11 @@ class PayoffDialog(QDialog):
         controls = QHBoxLayout()
         controls.setSpacing(12)
         controls.addWidget(form_label(t("每月额外还款")))
-        self.extra_input = QLineEdit("0.00")
+        self.extra_input = LineEdit("0.00")
         self.extra_input.setFixedWidth(130)
         controls.addWidget(self.extra_input)
         controls.addWidget(form_label(t("策略")))
-        self.method_combo = QComboBox()
+        self.method_combo = ComboBox()
         self.method_combo.addItem(t("雪崩法（先还高利率）"), "avalanche")
         self.method_combo.addItem(t("雪球法（先还小余额）"), "snowball")
         controls.addWidget(self.method_combo)
@@ -148,10 +154,10 @@ class PayoffDialog(QDialog):
         self.summary.setProperty("role", "muted")
         root.addWidget(self.summary)
 
-        self.table = QTableWidget(0, 3)
+        self.table = TableWidget(0, 3)
         self.table.setHorizontalHeaderLabels([t("月份"), t("还款"), t("剩余负债")])
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         root.addWidget(self.table, 1)
         self._add_close(root)

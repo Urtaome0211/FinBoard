@@ -1,15 +1,14 @@
 """Reconcile an account against a statement balance."""
 
 from __future__ import annotations
+from ..fluent_controls import DateEdit, LineEdit
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QDateEdit,
     QDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -57,7 +56,7 @@ class ReconcileDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-        self.statement_input = QLineEdit()
+        self.statement_input = LineEdit()
         self.statement_input.setPlaceholderText(
             t("输入银行/钱包显示的余额，例如 1250.00")
         )
@@ -65,11 +64,11 @@ class ReconcileDialog(QDialog):
         self.statement_input.textChanged.connect(self._update_preview)
         self.statement_input.returnPressed.connect(self._save)
         form.addRow(form_label(t("账单余额")), self.statement_input)
-        self.date_edit = QDateEdit(QDate.fromString(today_iso(), "yyyy-MM-dd"))
+        self.date_edit = DateEdit(QDate.fromString(today_iso(), "yyyy-MM-dd"))
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         form.addRow(form_label(t("对账日期")), self.date_edit)
-        self.note_input = QLineEdit()
+        self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注，例如：月末账单"))
         form.addRow(form_label(t("备注")), self.note_input)
         layout.addLayout(form)
@@ -185,7 +184,7 @@ class ReconcileDialog(QDialog):
             self.service.reconcile_account(
                 self.account.id,
                 value,
-                day=self.date_edit.date().toString("yyyy-MM-dd"),
+                day=self.date_edit.getDate().toString("yyyy-MM-dd"),
                 note=self.note_input.text(),
             )
         except ValueError as exc:

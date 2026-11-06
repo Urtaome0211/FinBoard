@@ -1,8 +1,9 @@
 """Batch category/tag editing for the transaction table."""
 
 from __future__ import annotations
+from ..fluent_controls import LineEdit
 
-from PySide6.QtWidgets import QDialog, QFormLayout, QLabel, QLineEdit
+from PySide6.QtWidgets import QDialog, QFormLayout, QLabel
 
 from ...core.service import FinanceService
 from ...i18n import category_display, t
@@ -51,9 +52,9 @@ class BulkEditDialog(QDialog):
                     f"{category_display(category.name)} · {t('支出' if kind == 'expense' else '收入')}",
                     category.id,
                 )
-        self.add_tags = QLineEdit()
+        self.add_tags = LineEdit()
         self.add_tags.setPlaceholderText(t("逗号分隔，例如：旅行, 报销"))
-        self.remove_tags = QLineEdit()
+        self.remove_tags = LineEdit()
         self.remove_tags.setPlaceholderText(t("逗号分隔；只移除已有标签"))
         form.addRow(form_label(t("分类")), self.category_combo)
         form.addRow(form_label(t("添加标签")), self.add_tags)

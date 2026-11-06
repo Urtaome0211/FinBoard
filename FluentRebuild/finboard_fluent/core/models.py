@@ -202,6 +202,34 @@ class DebtPayment:
 
 
 @dataclass(frozen=True)
+class TransactionTemplate:
+    """A reusable transaction draft for fast data entry."""
+
+    id: int
+    name: str
+    kind: str
+    amount: int = 0
+    currency: str = "CNY"
+    category_id: int | None = None
+    category_name: str = ""
+    account_id: int | None = None
+    account_name: str = ""
+    to_account_id: int | None = None
+    to_account_name: str = ""
+    payee: str = ""
+    note: str = ""
+    created_at: str = ""
+
+    @property
+    def title(self) -> str:
+        if self.payee:
+            return self.payee
+        if self.category_name:
+            return self.category_name
+        return self.name
+
+
+@dataclass(frozen=True)
 class FixedAssetValuation:
     id: int
     asset_id: int

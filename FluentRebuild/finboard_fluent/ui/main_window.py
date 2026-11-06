@@ -8,7 +8,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QFont, QKeySequence, QShortcut
+from PySide6.QtGui import QCloseEvent, QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from qfluentwidgets import (
@@ -30,7 +30,8 @@ from ..core.dates import month_of, today
 from ..core.models import Account, Transaction
 from ..core.rates import RateSnapshot, RateStore
 from ..i18n import is_english, language, set_language as set_ui_language, t
-from .dialogs import AccountDialog, TransactionDialog
+from .dialogs import AccountDialog, QuickEntryDialog, TransactionDialog
+from .hotkeys import GlobalHotkey
 from .icons import app_icon
 from .localize import apply_locale, localize_widgets
 from .pages import (
@@ -97,7 +98,27 @@ class _RateFetchThread(QThread):
             self.failed.emit(str(exc))
 
 
+class _QuoteFetchThread(QThread):
+    """Network-only quote fetch; prices are applied back on the GUI thread."""
+
+    fetched = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, service, symbols: list[str], parent=None) -> None:
+        super().__init__(parent)
+        self.service = service
+        self.symbols = symbols
+
+    def run(self) -> None:
+        try:
+            self.fetched.emit(self.service.fetch_market_quotes(self.symbols))
+        except Exception as exc:  # offline is expected
+            self.failed.emit(str(exc))
+
+
 class MainWindow(FluentWindow):
+    _live: "MainWindow | None" = None
+
     def __init__(
         self,
         service: "FinanceService",
@@ -106,17 +127,22 @@ class MainWindow(FluentWindow):
         language: str | None = None,
         theme: str | None = None,
         auto_refresh_rates: bool = True,
+        auto_refresh_quotes: bool = True,
     ) -> None:
         super().__init__()
         self.service = service
         self.settings = settings or QSettings("FinBoard", "FinBoard")
         self.current_key = "dashboard"
         self._rate_thread: _RateFetchThread | None = None
+        self._quote_thread: _QuoteFetchThread | None = None
         self._auto_refresh_rates_enabled = auto_refresh_rates
+        self._auto_refresh_quotes_enabled = auto_refresh_quotes
         self._quitting = False
         self._tray: QSystemTrayIcon | None = None
         self._tray_menu: QMenu | None = None
         self._tray_hint_shown = False
+        self._hotkey: GlobalHotkey | None = None
+        self._hotkey_registered = False
 
         set_ui_language(language or str(self.settings.value("language", "zh")))
         apply_locale()
@@ -131,8 +157,10 @@ class MainWindow(FluentWindow):
         self.setWindowIcon(app_icon())
         self.setMinimumSize(1100, 720)
         self.resize(1400, 880)
-        use_mica = sys.platform == "win32" and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
-        self.setMicaEffectEnabled(use_mica)
+        # Use the solid themed background on every platform.  Mica makes the
+        # navigation panel transparent; when the compositor is unavailable or
+        # the Mica effect fails the sidebar falls back to white on dark themes.
+        self.setMicaEffectEnabled(False)
 
         self.stack = self.stackedWidget
         self.pages: dict[str, QWidget] = {
@@ -155,6 +183,7 @@ class MainWindow(FluentWindow):
 
         self._build_navigation()
         self._build_titlebar_actions()
+        self._setup_hotkeys()
         self._build_shortcuts()
         self._build_tray()
         self._restore_geometry()
@@ -167,6 +196,8 @@ class MainWindow(FluentWindow):
         self.navigate("dashboard")
         QTimer.singleShot(1200, self._auto_refresh_rates)
         QTimer.singleShot(1200, self._check_reminders)
+        QTimer.singleShot(2200, self._auto_refresh_quotes)
+        MainWindow._live = self
 
     # ------------------------------------------------------------------ UI
     def _build_navigation(self) -> None:
@@ -204,6 +235,11 @@ class MainWindow(FluentWindow):
         self.add_button.setFixedHeight(32)
         self.add_button.clicked.connect(lambda _checked=False: self.open_transaction())
 
+        self.quick_button = TransparentToolButton(FluentIcon.EDIT, self)
+        self.quick_button.setFixedSize(32, 32)
+        self.quick_button.setToolTip(t("快速记账（Ctrl+Alt+N）"))
+        self.quick_button.clicked.connect(lambda: self.open_quick_entry())
+
         self.currency_chip = PushButton(self.service.currency, self)
         self.currency_chip.setFixedSize(64, 32)
         self.currency_chip.setToolTip(t("基准币种 · 打开汇率与货币设置"))
@@ -216,8 +252,20 @@ class MainWindow(FluentWindow):
         bar = self.titleBar.hBoxLayout
         bar.insertWidget(2, self.search)
         bar.insertWidget(3, self.add_button)
-        bar.insertWidget(4, self.currency_chip)
-        bar.insertWidget(5, self.theme_button)
+        bar.insertWidget(4, self.quick_button)
+        bar.insertWidget(5, self.currency_chip)
+        bar.insertWidget(6, self.theme_button)
+
+    def _setup_hotkeys(self) -> None:
+        self._hotkey = GlobalHotkey(QApplication.instance(), parent=self)
+        self._hotkey.activated.connect(
+            self.open_quick_entry, Qt.ConnectionType.QueuedConnection
+        )
+        if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            try:
+                self._hotkey_registered = self._hotkey.register()
+            except Exception:
+                self._hotkey_registered = False
 
     def _build_shortcuts(self) -> None:
         self._shortcuts = []
@@ -228,6 +276,8 @@ class MainWindow(FluentWindow):
             ("Ctrl+Z", self.undo_last),
             ("Ctrl+,", lambda: self.navigate("settings")),
         ]
+        if not self._hotkey_registered:
+            bindings.append(("Ctrl+Alt+N", self.open_quick_entry))
         for sequence, callback in bindings:
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.activated.connect(callback)
@@ -311,9 +361,52 @@ class MainWindow(FluentWindow):
             self._rate_thread.deleteLater()
             self._rate_thread = None
 
+    def _auto_refresh_quotes(self) -> None:
+        if self._quitting or not self._auto_refresh_quotes_enabled:
+            return
+        if not self.settings.value("quotes/auto", False, type=bool):
+            return
+        if self._quote_thread is not None and self._quote_thread.isRunning():
+            return
+        symbols = self.service.quote_symbols()
+        if not symbols:
+            return
+        thread = _QuoteFetchThread(self.service, symbols, self)
+        thread.fetched.connect(self._quotes_fetched)
+        thread.failed.connect(self._quotes_failed)
+        thread.finished.connect(self._quote_finished)
+        self._quote_thread = thread
+        thread.start()
+
+    def _quotes_fetched(self, quotes: list) -> None:
+        if not quotes:
+            return
+        try:
+            self.service.apply_market_quotes(quotes)
+        except Exception:
+            return
+        page = self.pages.get("settings")
+        if page is not None and hasattr(page, "_update_quote_labels"):
+            page._update_quote_labels()
+
+    def _quotes_failed(self, _message: str) -> None:
+        # Offline is expected; Keep the cached prices and stay quiet.
+        return
+
+    def _quote_finished(self) -> None:
+        if self._quote_thread is not None:
+            self._quote_thread.deleteLater()
+            self._quote_thread = None
+
     # ------------------------------------------------------------------ dialogs
     def open_transaction(self, transaction: Transaction | None = None) -> None:
         dialog = TransactionDialog(self.service, transaction, parent=self)
+        localize_widgets(dialog)
+        dialog.exec()
+
+    def open_quick_entry(self) -> None:
+        self._show_from_tray()
+        dialog = QuickEntryDialog(self.service, parent=self)
         localize_widgets(dialog)
         dialog.exec()
 
@@ -375,7 +468,7 @@ class MainWindow(FluentWindow):
 
     def _quick_add_from_tray(self) -> None:
         self._show_from_tray()
-        self.open_transaction()
+        self.open_quick_entry()
 
     def _quick_copy_from_tray(self) -> None:
         self._show_from_tray()
@@ -506,6 +599,11 @@ class MainWindow(FluentWindow):
         current = self.current_key
         geometry = self.saveGeometry()
         maximized = self.isMaximized()
+
+        # Release the old shell's global hotkey and background threads before
+        # the replacement tries to register the same hotkey.
+        self.shutdown()
+
         replacement = MainWindow(
             self.service,
             self.settings,
@@ -517,21 +615,13 @@ class MainWindow(FluentWindow):
             replacement.showMaximized()
         else:
             replacement.show()
+        MainWindow._live = replacement
         replacement.navigate(current)
         replacement.raise_()
         replacement.activateWindow()
 
-        # Stop the background rate fetch before tearing this shell down;
-        # deleting a QThread while it is still running crashes Qt.
-        if self._rate_thread is not None:
-            if self._rate_thread.isRunning():
-                self._rate_thread.wait(10_000)
-            self._rate_thread.deleteLater()
-            self._rate_thread = None
-
         # Close the old shell after the replacement is visible.  ``hide()``
         # first prevents the tray-enabled closeEvent from leaving a ghost.
-        self._quitting = True
         self.hide()
         self.close()
         self.deleteLater()
@@ -552,6 +642,22 @@ class MainWindow(FluentWindow):
     def _apply_fluent_theme(self, mode: str) -> None:
         setTheme(Theme.DARK if mode == "dark" else Theme.LIGHT)
         setThemeColor("#3D6DF2")
+        # qfluentwidgets animates the window background for 120ms after
+        # ``themeChanged``; stop it and paint the final solid colour at once so
+        # the navigation/title bar cannot show the old white surface.
+        if hasattr(self, "backgroundColorAni"):
+            self.backgroundColorAni.stop()
+        self.setMicaEffectEnabled(False)
+        self.setBackgroundColor(
+            QColor(32, 32, 32) if mode == "dark" else QColor(240, 244, 249)
+        )
+        panel = self.navigationInterface.panel
+        viewport = panel.scrollWidget.parentWidget()
+        if viewport is not None:
+            viewport.setStyleSheet("background: transparent;")
+        self.navigationInterface.panel.repaint()
+        self.titleBar.repaint()
+        self.update()
 
     def _on_theme_changed(self) -> None:
         self._update_theme_button()
@@ -621,9 +727,17 @@ class MainWindow(FluentWindow):
     def shutdown(self) -> None:
         """Stop background work before the application exits."""
         self._quitting = True
-        thread = self._rate_thread
-        if thread is not None:
-            if thread.isRunning():
-                thread.wait(15_000)
-            thread.deleteLater()
-            self._rate_thread = None
+        if self._tray is not None:
+            self._tray.hide()
+            self._tray = None
+        if self._hotkey is not None:
+            self._hotkey.unregister()
+            self._hotkey = None
+            self._hotkey_registered = False
+        for name in ("_rate_thread", "_quote_thread"):
+            thread = getattr(self, name, None)
+            if thread is not None:
+                if thread.isRunning():
+                    thread.wait(15_000)
+                thread.deleteLater()
+                setattr(self, name, None)

@@ -8,21 +8,31 @@ from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QProgressBar,
-    QPushButton,
-    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    CardWidget,
+    PrimaryPushButton,
+    PushButton,
+    SegmentedWidget,
+    SmoothScrollArea,
+    TitleLabel,
+    TransparentToolButton,
+)
+
 from ..core.dates import month_choices, month_label, today, month_of
+from .fluent_controls import ComboBox as FluentComboBox
+from .fluent_controls import SearchLineEdit
 from .icons import app_icon, icon, set_button_icon
 from .theme import colors, theme_store, tone_for_ratio
 
@@ -138,8 +148,8 @@ class Badge(QLabel):
         )
 
 
-class Card(QFrame):
-    """White surface with a thin border and comfortable padding."""
+class Card(CardWidget):
+    """Fluent card surface with the compact padding used across the app."""
 
     def __init__(
         self,
@@ -151,6 +161,7 @@ class Card(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName(object_name)
+        self.setBorderRadius(8)
         self.body = QVBoxLayout(self)
         self.body.setContentsMargins(padding, padding, padding, padding)
         self.body.setSpacing(spacing)
@@ -165,11 +176,11 @@ class Card(QFrame):
         row.setSpacing(10)
         column = QVBoxLayout()
         column.setSpacing(3)
-        title_label = QLabel(title)
+        title_label = BodyLabel(title)
         title_label.setProperty("role", "cardTitle")
         column.addWidget(title_label)
         if hint:
-            hint_label = QLabel(hint)
+            hint_label = CaptionLabel(hint)
             hint_label.setProperty("role", "muted")
             column.addWidget(hint_label)
         row.addLayout(column)
@@ -193,10 +204,10 @@ class PageHeader(QWidget):
         row.setSpacing(12)
         column = QVBoxLayout()
         column.setSpacing(4)
-        self.title_label = QLabel(title, self)
+        self.title_label = TitleLabel(title, self)
         self.title_label.setProperty("role", "pageTitle")
         column.addWidget(self.title_label)
-        self.subtitle_label = QLabel(subtitle, self)
+        self.subtitle_label = CaptionLabel(subtitle, self)
         self.subtitle_label.setProperty("role", "pageSubtitle")
         column.addWidget(self.subtitle_label)
         self.subtitle_label.setVisible(bool(subtitle))
@@ -222,9 +233,9 @@ class Page(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        self.scroll_area: QScrollArea | None = None
+        self.scroll_area: SmoothScrollArea | None = None
         if scroll:
-            area = QScrollArea()
+            area = SmoothScrollArea()
             area.setWidgetResizable(True)
             area.setFrameShape(QFrame.Shape.NoFrame)
             area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -242,7 +253,7 @@ class Page(QWidget):
             self.body.setSpacing(16)
 
 
-class SearchInput(QLineEdit):
+class SearchInput(SearchLineEdit):
     def __init__(
         self, placeholder: str = "搜索…", parent: QWidget | None = None
     ) -> None:
@@ -251,34 +262,15 @@ class SearchInput(QLineEdit):
         self.setPlaceholderText(placeholder)
         self.setClearButtonEnabled(True)
         self.setMinimumWidth(220)
-        self._search_action = self.addAction(
-            icon("search", colors().faint, 17), QLineEdit.ActionPosition.LeadingPosition
-        )
-        theme_store.changed.connect(self._refresh)
-
-    def _refresh(self) -> None:
-        self._search_action.setIcon(icon("search", colors().faint, 17))
 
 
-class ComboBox(QComboBox):
-    """QComboBox with a consistently drawn chevron in both themes."""
+class ComboBox(FluentComboBox):
+    """Fluent combo box used throughout the app."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        theme_store.changed.connect(self.update)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
-        palette = colors()
-        color = palette.faint if not self.isEnabled() else palette.muted
-        painter = QPainter(self)
-        chevron = icon("chevron-down", color, 14)
-        chevron.paint(
-            painter,
-            QRect(self.width() - 25, (self.height() - 14) // 2, 14, 14),
-        )
-        painter.end()
 
 
 class MonthCombo(ComboBox):
@@ -307,7 +299,7 @@ class MonthCombo(ComboBox):
             self.setCurrentIndex(index)
 
 
-class NavButton(QPushButton):
+class NavButton(PushButton):
     def __init__(
         self, icon_name: str, text: str, parent: QWidget | None = None
     ) -> None:
@@ -327,47 +319,39 @@ class NavButton(QPushButton):
         set_button_icon(self, self._icon_name, color, 19)
 
 
-class ThemedButton(QPushButton):
-    def __init__(
-        self,
-        text: str,
-        kind: str = "primary",
-        icon_name: str | None = None,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(text, parent)
-        self._kind = kind
-        self._icon_name = icon_name
-        object_names = {
+def ThemedButton(
+    text: str,
+    kind: str = "primary",
+    icon_name: str | None = None,
+    parent: QWidget | None = None,
+) -> PushButton:
+    """Return a qfluentwidgets button for the old semantic button kinds."""
+    button: PushButton
+    if kind == "primary":
+        button = PrimaryPushButton(text, parent)
+    else:
+        button = PushButton(text, parent)
+    button.setObjectName(
+        {
             "primary": "PrimaryButton",
             "secondary": "SecondaryButton",
             "ghost": "GhostButton",
             "danger": "DangerButton",
             "soft": "SoftButton",
             "link": "LinkButton",
-        }
-        self.setObjectName(object_names.get(kind, "SecondaryButton"))
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setIconSize(QSize(17, 17))
-        theme_store.changed.connect(self._refresh_icon)
-        self._refresh_icon()
-
-    def _icon_color(self) -> str:
-        palette = colors()
-        if self._kind in ("primary", "danger"):
-            return "#FFFFFF"
-        if self._kind == "soft":
-            return palette.primary
-        if self._kind == "link":
-            return palette.primary
-        return palette.muted
-
-    def _refresh_icon(self) -> None:
-        if self._icon_name:
-            set_button_icon(self, self._icon_name, self._icon_color(), 17)
+        }.get(kind, "SecondaryButton")
+    )
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    if icon_name:
+        set_button_icon(
+            button, icon_name,
+            "#FFFFFF" if kind in ("primary", "danger") else colors().primary,
+            17,
+        )
+    return button
 
 
-class IconButton(QPushButton):
+class IconButton(TransparentToolButton):
     def __init__(
         self,
         icon_name: str,
@@ -377,7 +361,7 @@ class IconButton(QPushButton):
         size: int = 18,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self._icon_name = icon_name
         self._color = color
         self._size = size
@@ -405,33 +389,28 @@ class SegmentedControl(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._buttons: list[tuple[object, QPushButton]] = []
         self._value: object | None = None
+        self._keys: dict[str, object] = {}
+        self._updating = False
+        self._segmented = SegmentedWidget(self)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        frame = QFrame()
-        frame.setObjectName("Segment")
-        frame_layout = QHBoxLayout(frame)
-        frame_layout.setContentsMargins(3, 3, 3, 3)
-        frame_layout.setSpacing(2)
-        self._group = QButtonGroup(self)
-        self._group.setExclusive(True)
-        for label, value in options:
-            button = QPushButton(label)
-            button.setObjectName("SegmentButton")
-            button.setCheckable(True)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(
-                lambda _checked=False, value=value: self._choose(value)
+        layout.addWidget(self._segmented)
+        for index, (label, value) in enumerate(options):
+            key = f"segment-{index}"
+            self._keys[key] = value
+            self._segmented.addItem(
+                key,
+                label,
+                onClick=lambda _checked=False, key=key: self._choose(key),
             )
-            self._group.addButton(button)
-            frame_layout.addWidget(button)
-            self._buttons.append((value, button))
-        layout.addWidget(frame)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.set_value(current if current is not None else options[0][1], emit=False)
 
-    def _choose(self, value: object) -> None:
+    def _choose(self, key: str) -> None:
+        if self._updating:
+            return
+        value = self._keys.get(key)
         if value == self._value:
             return
         self._value = value
@@ -441,10 +420,14 @@ class SegmentedControl(QWidget):
         return self._value
 
     def set_value(self, value: object, *, emit: bool = False) -> None:
-        for option_value, button in self._buttons:
+        for key, option_value in self._keys.items():
             if option_value == value:
-                button.setChecked(True)
                 self._value = value
+                self._updating = True
+                try:
+                    self._segmented.setCurrentItem(key)
+                finally:
+                    self._updating = False
                 if emit:
                     self.changed.emit(value)
                 return

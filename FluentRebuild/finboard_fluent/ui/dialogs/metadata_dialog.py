@@ -1,6 +1,7 @@
 """Tags, splits and attachments for an existing transaction."""
 
 from __future__ import annotations
+from ..fluent_controls import ComboBox, LineEdit, ListWidget, PushButton, TableWidget
 
 from pathlib import Path
 
@@ -8,16 +9,11 @@ from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QListWidget,
     QListWidgetItem,
-    QPushButton,
-    QTableWidget,
     QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
@@ -75,7 +71,7 @@ class MetadataDialog(QDialog):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        self.split_table = QTableWidget(0, 3)
+        self.split_table = TableWidget(0, 3)
         self.split_table.setHorizontalHeaderLabels([t("分类"), t("金额"), t("备注")])
         self.split_table.horizontalHeader().setStretchLastSection(True)
         self.split_table.setColumnWidth(0, 190)
@@ -112,7 +108,7 @@ class MetadataDialog(QDialog):
     ) -> None:
         row = self.split_table.rowCount()
         self.split_table.insertRow(row)
-        combo = QComboBox()
+        combo = ComboBox()
         for category in self.split_categories:
             combo.addItem(category.name, category.id)
         if category_id is not None:
@@ -168,7 +164,7 @@ class MetadataDialog(QDialog):
         hint.setProperty("role", "muted")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        self.tags_input = QLineEdit()
+        self.tags_input = LineEdit()
         self.tags_input.setPlaceholderText(t("例如：旅行, 报销, 家庭"))
         self.tags_input.setText(", ".join(tag.name for tag in self.transaction.tags))
         layout.addWidget(self.tags_input)
@@ -188,7 +184,7 @@ class MetadataDialog(QDialog):
         hint.setProperty("role", "muted")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        self.attachment_list = QListWidget()
+        self.attachment_list = ListWidget()
         self.attachment_list.itemDoubleClicked.connect(self._open_attachment)
         layout.addWidget(self.attachment_list, 1)
         buttons = QHBoxLayout()
