@@ -4,6 +4,12 @@ The app is local-first: quotes are only fetched when the user asks for them,
 or when automatic refresh is enabled in Settings.  The provider is Tencent's
 public quote endpoint, which returns a compact GBK-encoded payload.  Everything
 here is network-only and returns integer cents, like the rest of the app.
+
+Tencent covers mainland A-shares, Hong Kong and US tickers.  US codes are
+prefixed with ``us`` (``usSCHD``), HK codes with ``hk`` (``hk00700``), and the
+provider reports the currency in the quote payload.  Symbols entered by hand
+can use a bare code (``600000``, ``SCHD``), an exchange prefix
+(``SH600000``, ``US.SCHD``) or a suffix (``600000.SH``, ``SCHD.US``).
 """
 
 from __future__ import annotations
@@ -16,7 +22,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 _QUOTE_URL = "https://qt.gtimg.cn/q="
-_LINE = re.compile(r'v_([a-zA-Z0-9]+)="([^"]*)"')
+_LINE = re.compile(r'v_([a-zA-Z0-9.]+)="([^"]*)"')
+_US_TICKER = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -24,6 +31,10 @@ _HEADERS = {
     ),
     "Referer": "https://gu.qq.com/",
 }
+
+# Currencies the Tencent quote feed can price.  A holding in any other
+# currency is left untouched rather than being silently mis-priced.
+QUOTE_CURRENCIES = frozenset({"CNY", "USD", "HKD"})
 
 
 class QuoteError(RuntimeError):
@@ -44,25 +55,91 @@ class Quote:
         return bool(self.symbol) and self.price >= 0
 
 
+def _with_prefix(prefix: str, body: str) -> str:
+    """Canonicalise an exchange prefix plus code body."""
+    prefix = prefix.lower()
+    body = str(body or "").strip().upper()
+    if not body:
+        return ""
+    if prefix in ("sh", "sz", "bj"):
+        digits = re.sub(r"\D", "", body)
+        if len(digits) != 6:
+            return ""
+        return f"{prefix}{digits}"
+    if prefix == "hk":
+        digits = re.sub(r"\D", "", body)
+        if not 1 <= len(digits) <= 5:
+            return ""
+        return f"hk{digits.zfill(5)}"
+    if prefix == "us":
+        ticker = body.replace(" ", "").strip(".-")
+        if not _US_TICKER.fullmatch(ticker):
+            return ""
+        return f"us{ticker}"
+    return ""
+
+
 def normalize_symbol(raw: str) -> str:
-    """Return a provider code such as ``sh600000`` or ``sz000001``."""
-    text = str(raw or "").strip().lower().replace(".", "")
+    """Return a provider code such as ``sh600000``, ``hk00700`` or ``usSCHD``.
+
+    Accepts bare codes, exchange prefixes and common suffixes.  US tickers are
+    letters (or letters with a dot/dash), HK codes are padded to five digits.
+    """
+    text = str(raw or "").strip().upper().replace(" ", "")
     if not text:
         return ""
-    if text[:2] in ("sh", "sz", "bj", "hk") and text[2:].isdigit():
-        return text
-    if not text.isdigit():
+    text = text.replace("：", ":").replace("／", "/")
+
+    # Exchange prefix: SH600000, SH.600000, US.SCHD, HK:00700.
+    prefixed = re.match(r"^(SH|SZ|BJ|HK|US)[.:\-_/]?(.+)$", text)
+    if prefixed:
+        return _with_prefix(prefixed.group(1), prefixed.group(2))
+
+    # Exchange suffix: 600000.SH, 510300.SS, SCHD.US, 00700.HK.
+    suffixed = re.match(r"^(.+?)[.:\-_/](SH|SS|SZ|BJ|HK|US)$", text)
+    if suffixed:
+        prefix = "sh" if suffixed.group(2) == "SS" else suffixed.group(2)
+        return _with_prefix(prefix, suffixed.group(1))
+
+    if text.isdigit():
+        if len(text) in (3, 4, 5):
+            return f"hk{text.zfill(5)}"
+        if len(text) != 6:
+            return ""
+        if text[0] in "569":
+            return f"sh{text}"
+        if text[0] in "0123":
+            return f"sz{text}"
+        if text[0] in "48":
+            return f"bj{text}"
         return ""
-    if len(text) == 5:
-        return f"hk{text}"
-    if len(text) != 6:
+
+    # A bare US ticker: SCHD, INTC, BRK.B.
+    if _US_TICKER.fullmatch(text):
+        return f"us{text}"
+    return ""
+
+
+def _quote_currency(provider: str, fields: list[str]) -> str:
+    declared = fields[35].strip().upper() if len(fields) > 35 else ""
+    if declared in QUOTE_CURRENCIES:
+        return declared
+    if provider.startswith("us"):
+        return "USD"
+    if provider.startswith("hk"):
+        return "HKD"
+    return "CNY"
+
+
+def _quote_timestamp(fields: list[str]) -> str:
+    raw = fields[30].strip() if len(fields) > 30 else ""
+    if not raw:
         return ""
-    if text[0] in "569":
-        return f"sh{text}"
-    if text[0] in "0123":
-        return f"sz{text}"
-    if text[0] in "48":
-        return f"bj{text}"
+    for fmt in ("%Y%m%d%H%M%S", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return datetime.strptime(raw[:19], fmt).isoformat(timespec="seconds")
+        except ValueError:
+            continue
     return ""
 
 
@@ -88,22 +165,13 @@ def parse_quotes(payload: str) -> list[Quote]:
             continue
         if price <= 0:
             continue
-        stamp = fields[30].strip() if len(fields) > 30 else ""
-        updated_at = ""
-        if len(stamp) >= 14 and stamp[:14].isdigit():
-            try:
-                updated_at = datetime.strptime(
-                    stamp[:14], "%Y%m%d%H%M%S"
-                ).isoformat(timespec="seconds")
-            except ValueError:
-                updated_at = ""
         quotes.append(
             Quote(
                 symbol=code,
                 name=name,
                 price=price,
-                currency="CNY",
-                updated_at=updated_at,
+                currency=_quote_currency(code, fields),
+                updated_at=_quote_timestamp(fields),
             )
         )
     return quotes
@@ -112,8 +180,8 @@ def parse_quotes(payload: str) -> list[Quote]:
 def fetch_quotes(symbols: list[str], *, timeout: float = 6.0) -> list[Quote]:
     """Fetch quotes for the given symbols.
 
-    Invalid or non-CNY symbols are simply skipped.  Raises :class:`QuoteError`
-    when the provider cannot be reached or returns no usable quote.
+    Invalid symbols are skipped.  Raises :class:`QuoteError` when the provider
+    cannot be reached or returns no usable quote.
     """
     codes: list[str] = []
     seen: set[str] = set()

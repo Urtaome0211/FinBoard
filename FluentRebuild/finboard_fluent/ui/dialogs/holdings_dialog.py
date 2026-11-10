@@ -583,6 +583,8 @@ class HoldingsDialog(QDialog):
             item = self.allocation_legend.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
         if not rows:
             self.allocation_chart.set_data([], center_title=t("持仓市值"))

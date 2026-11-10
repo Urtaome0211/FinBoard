@@ -9,6 +9,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from finboard_fluent.core.database import Database
@@ -23,6 +24,7 @@ class QuickEntryTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
+        QSettings("FinBoard", "FinBoard").clear()
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Database(Path(self.tmp.name) / "test.db")
         self.repo = Repository(self.db)
@@ -36,6 +38,9 @@ class QuickEntryTests(unittest.TestCase):
 
     def test_saves_compact_expense(self) -> None:
         dialog = QuickEntryDialog(self.service)
+        dialog.account_combo.setCurrentIndex(
+            dialog.account_combo.findData(self.account)
+        )
         dialog.amount_input.setText("12.34")
         dialog.payee_input.setText("咖啡")
         dialog.category_combo.setCurrentIndex(

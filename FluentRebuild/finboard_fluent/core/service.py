@@ -42,7 +42,7 @@ from .models import (
 from .money import CURRENCIES, format_cents, format_compact, format_percentage
 from .paths import attachment_path, attachments_dir
 from .rates import RateSnapshot, RateStore
-from .quotes import Quote, fetch_quotes, normalize_symbol
+from .quotes import QUOTE_CURRENCIES, Quote, fetch_quotes, normalize_symbol
 from .repository import Repository
 
 
@@ -132,7 +132,7 @@ class FinanceService(QObject):
         symbols = {
             normalize_symbol(item.symbol)
             for item in self.repo.holdings()
-            if item.quantity_units > 0 and item.currency == "CNY"
+            if item.quantity_units > 0 and item.currency in QUOTE_CURRENCIES
         }
         return sorted(symbol for symbol in symbols if symbol)
 
@@ -161,10 +161,14 @@ class FinanceService(QObject):
         """Apply fetched prices on the GUI thread, then cache and notify."""
         by_symbol = {quote.symbol: quote for quote in quotes}
         for holding in self.repo.holdings():
-            if holding.currency != "CNY":
+            if holding.currency not in QUOTE_CURRENCIES:
                 continue
             quote = by_symbol.get(normalize_symbol(holding.symbol))
-            if quote is not None and quote.price != holding.price:
+            if (
+                quote is not None
+                and quote.currency == holding.currency
+                and quote.price != holding.price
+            ):
                 self.repo.update_holding_price(holding.id, quote.price)
         fetched_at = datetime.now().isoformat(timespec="seconds")
         self.repo.meta_set(
