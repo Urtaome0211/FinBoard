@@ -24,7 +24,7 @@ class InvestmentLotTests(unittest.TestCase):
 
     def test_schema_has_investment_tables(self) -> None:
         version = self.db.conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 18)
+        self.assertEqual(version, 19)
         tables = {
             row[0]
             for row in self.db.conn.execute(
@@ -95,6 +95,44 @@ class InvestmentLotTests(unittest.TestCase):
         lots = self.repo.investment_lots(self.account_id)
         self.assertEqual(sum(item.remaining_units for item in lots), 500_000)
 
+    def test_sell_all_clears_position_without_check_error(self) -> None:
+        self.repo.record_investment_trade(
+            self.account_id,
+            kind="buy",
+            symbol="510300",
+            name="沪深300ETF",
+            trade_date="2026-01-05",
+            quantity_units=1_000_000,
+            price=10_000,
+        )
+        self.repo.record_investment_trade(
+            self.account_id,
+            kind="sell",
+            symbol="510300",
+            name="沪深300ETF",
+            trade_date="2026-02-05",
+            quantity_units=1_000_000,
+            price=12_000,
+        )
+        holding = self.repo.holdings(self.account_id)[0]
+        self.assertEqual(holding.quantity_units, 0)
+        self.assertEqual(holding.cost_price, 0)
+        self.assertEqual(holding.realized_profit, 2_000)
+
+        self.repo.record_investment_trade(
+            self.account_id,
+            kind="buy",
+            symbol="510300",
+            name="沪深300ETF",
+            trade_date="2026-03-05",
+            quantity_units=500_000,
+            price=13_000,
+        )
+        holding = self.repo.holdings(self.account_id)[0]
+        self.assertEqual(holding.quantity_units, 500_000)
+        self.assertEqual(holding.cost_price, 13_000)
+        self.assertEqual(holding.realized_profit, 2_000)
+
     def test_sell_more_than_held_is_rejected(self) -> None:
         self.repo.record_investment_trade(
             self.account_id,
@@ -141,7 +179,7 @@ class InvestmentLotTests(unittest.TestCase):
         repo = Repository(db)
         trades = repo.investment_trades(account_id)
         lots = repo.investment_lots(account_id)
-        self.assertEqual(repo.db.conn.execute("PRAGMA user_version").fetchone()[0], 18)
+        self.assertEqual(repo.db.conn.execute("PRAGMA user_version").fetchone()[0], 19)
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0].kind, "buy")
         self.assertEqual(trades[0].quantity_units, 2_000_000)

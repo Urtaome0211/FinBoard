@@ -539,7 +539,34 @@ if item.quantity_units > 0 and item.currency == "CNY"
 
 对用户来说，最重要的变化不是版本号，而是“点更新行情，所有市场都能更新”。对项目来说，这也是一次发布纪律的修正：**本地验证通过的修复，只有进入正式包和 Release，才算真正交付。**
 
-## 十六、结语
+## 十六、5.4.1：全部卖出不能把持仓写成 0
+
+5.4 发布后，用户卖出整笔持仓时报：
+
+```text
+sqlite3.IntegrityError: CHECK constraint failed: quantity_units > 0
+```
+
+堆栈落在 `record_investment_trade()` → `_write_holding_values()`。原因很直接：`holdings` 表的 `quantity_units` 从 V7 起就有 `CHECK (quantity_units > 0)`，而全部卖出时 `new_qty = old_qty - quantity_units = 0`，UPDATE 被约束拒绝。部分卖出不会触发，所以之前的 FIFO 测试没覆盖到。
+
+修复有两种选择：
+
+- 卖光后删除 holding，简单，但会丢掉 `realized_profit`、`dividends` 和成本信息；
+- 允许持仓数量为 0，保留一行“已清仓”记录。
+
+选择第二种。schema 升到 19，在 `SCHEMA_V19` 里重建 `holdings` 表：
+
+1. 新建 `holdings_new`，把 `quantity_units` 约束改成 `>= 0`；
+2. 原样复制 id、成本、价格、已实现收益、分红、资产类别、地区；
+3. 删除旧表并重命名，重建 `idx_holdings_account`。
+
+这样全部卖出后，holding 行保留，数量为 0、成本价为 0、已实现收益和分红不丢；再买入同一代码时会在原行上累加。`holdings_summary()` 的持仓数量也改为只统计 `quantity_units > 0` 的开放持仓。
+
+新增测试覆盖完整链路：买入 1 份、全部卖出、断言数量 0 且已实现收益正确，再买回 0.5 份并确认成本价和收益保留。测试总数 176，全量通过。
+
+这个 bug 的教训是：**部分卖出测试通过，不代表全部卖出成立。** 边界值（0、满仓、超卖）要单独写用例。
+
+## 十七、结语
 
 这次重构证明：对一个已经稳定的桌面应用，**只换壳**是可行的，而且成本远低于重写。真正花时间的不是 `FluentWindow` 本身，而是那些“壳和页面之间”的胶水：导航状态、主题同步、语言刷新、托盘关闭、打包资源；而 5.1 的四项功能说明，壳稳定之后，真正难的是数据迁移和金额口径。
 
@@ -547,4 +574,4 @@ if item.quantity_units > 0 and item.currency == "CNY"
 
 ---
 
-*本文对应的代码在 `FluentRebuild/`；5.4.0 已发布到 [GitHub Releases](https://github.com/Urtaome0211/FinBoard/releases/tag/v5.4)。*
+*本文对应的代码在 `FluentRebuild/`；5.4.0 已发布到 [GitHub Releases](https://github.com/Urtaome0211/FinBoard/releases/tag/v5.4)，5.4.1 是本地卖出修复版。*

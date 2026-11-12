@@ -10,7 +10,7 @@ from typing import Iterator
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -567,6 +567,44 @@ CREATE INDEX IF NOT EXISTS idx_transaction_templates_name
 """
 
 
+SCHEMA_V19 = """
+DROP TABLE IF EXISTS holdings_new;
+
+CREATE TABLE holdings_new (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id      INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    symbol          TEXT    NOT NULL DEFAULT '',
+    name            TEXT    NOT NULL,
+    quantity_units  INTEGER NOT NULL CHECK (quantity_units >= 0),
+    cost_price      INTEGER NOT NULL CHECK (cost_price >= 0),
+    price           INTEGER NOT NULL CHECK (price >= 0),
+    note            TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT,
+    realized_profit INTEGER NOT NULL DEFAULT 0,
+    dividends       INTEGER NOT NULL DEFAULT 0,
+    asset_class     TEXT    NOT NULL DEFAULT '',
+    region          TEXT    NOT NULL DEFAULT ''
+);
+
+INSERT INTO holdings_new (
+    id, account_id, symbol, name, quantity_units, cost_price, price,
+    note, created_at, updated_at, realized_profit, dividends,
+    asset_class, region
+)
+SELECT
+    id, account_id, symbol, name, quantity_units, cost_price, price,
+    note, created_at, updated_at, realized_profit, dividends,
+    asset_class, region
+FROM holdings;
+
+DROP TABLE holdings;
+ALTER TABLE holdings_new RENAME TO holdings;
+
+CREATE INDEX IF NOT EXISTS idx_holdings_account ON holdings(account_id);
+"""
+
+
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
 
@@ -657,6 +695,9 @@ class Database:
         if version < 18:
             conn.executescript(SCHEMA_V18)
             version = 18
+        if version < 19:
+            conn.executescript(SCHEMA_V19)
+            version = 19
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

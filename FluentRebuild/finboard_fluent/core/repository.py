@@ -1949,7 +1949,7 @@ class Repository:
         return HoldingsSummary(
             cost=cost,
             market=market,
-            count=len(rows),
+            count=sum(1 for item in rows if item.quantity_units > 0),
             realized=realized,
             dividends=dividends,
         )
