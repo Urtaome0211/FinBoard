@@ -21,6 +21,8 @@ from .core.database import Database
 from .core.models import TransactionFilter
 from .core.paths import default_db_path, demo_db_path, log_path, portable_data_dir
 from .core.repository import Repository
+from .core.security import DatabaseLocked, SecurityError, is_encrypted_file, load_config, unlock_key
+from .ui.dialogs.prompt import ask_text
 from .core.service import FinanceService
 from .i18n import is_english, set_language, t
 from .ui.icons import app_icon
@@ -48,10 +50,36 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _unlock_password(path: Path) -> str | None:
+    """Return the SQLCipher key for an encrypted profile, prompting if needed."""
+    if not is_encrypted_file(path):
+        return None
+    config = load_config(path)
+    if not config:
+        raise DatabaseLocked(
+            "数据库已加密，但同目录缺少 security.json，无法解锁。"
+        )
+    for _ in range(3):
+        password, ok = ask_text(
+            None,
+            title=t("解锁数据库"),
+            label=t("请输入数据库密码"),
+            password=True,
+        )
+        if not ok:
+            raise DatabaseLocked("已取消解锁")
+        try:
+            return unlock_key(config, password)
+        except SecurityError:
+            QMessageBox.warning(None, t("密码不正确"), t("请重新输入数据库密码。"))
+    raise DatabaseLocked("密码错误次数过多")
+
+
 def _open_database(path: Path, *, allow_fallback: bool = True) -> tuple[Database, Path | None]:
     """Open the database, falling back beside the app if the profile is read-only."""
     path = Path(path).expanduser()
-    db = Database(path)
+    encryption_key = _unlock_password(path)
+    db = Database(path, encryption_key=encryption_key)
     try:
         db.conn.execute("SELECT 1")
         return db, None
@@ -166,7 +194,11 @@ def main(argv: list[str] | None = None) -> int:
 
     db_path = args.db or (demo_db_path() if (args.demo or args.reset_demo) else default_db_path())
     _install_excepthook()
-    db, fallback = _open_database(Path(db_path), allow_fallback=args.db is None)
+    try:
+        db, fallback = _open_database(Path(db_path), allow_fallback=args.db is None)
+    except (DatabaseLocked, SecurityError) as exc:
+        QMessageBox.critical(None, t("无法打开数据库"), str(exc))
+        return 1
     repo = Repository(db)
     integrity_ok, integrity_detail, integrity_repaired = _startup_maintenance(db, settings)
     if args.reset_demo or (

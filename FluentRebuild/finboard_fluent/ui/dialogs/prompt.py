@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QDialog, QHBoxLayout
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLineEdit
 
 from ...i18n import t
 from ..fluent_controls import LineEdit
@@ -18,6 +18,7 @@ class TextPromptDialog(QDialog):
         title: str,
         label: str,
         default: str = "",
+        password: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -28,6 +29,8 @@ class TextPromptDialog(QDialog):
         layout.addLayout(header)
         layout.addWidget(form_label(label))
         self.input = LineEdit(default)
+        if password:
+            self.input.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.input)
         footer = QHBoxLayout()
         footer.setSpacing(10)
@@ -47,9 +50,16 @@ class TextPromptDialog(QDialog):
         return self.input.text().strip()
 
 
-def ask_text(parent, *, title: str, label: str, default: str = "") -> tuple[str, bool]:
+def ask_text(
+    parent,
+    *,
+    title: str,
+    label: str,
+    default: str = "",
+    password: bool = False,
+) -> tuple[str, bool]:
     dialog = TextPromptDialog(
-        parent, title=title, label=label, default=default
+        parent, title=title, label=label, default=default, password=password
     )
     if dialog.exec() == QDialog.DialogCode.Accepted:
         return dialog.value(), True

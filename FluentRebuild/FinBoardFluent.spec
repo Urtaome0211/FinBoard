@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH)
 RESOURCES = ROOT / "finboard_fluent" / "resources"
@@ -17,19 +17,24 @@ datas = [
     (str(LOCALES / "en.json"), "finboard_fluent/locales"),
 ]
 datas += collect_data_files("qfluentwidgets")
+sc_datas, sc_binaries, sc_hidden = collect_all("sqlcipher3")
+datas += sc_datas
+binaries = sc_binaries
 
 hiddenimports = [
     "PySide6.QtSvg",
     "openpyxl",
     "qframelesswindow",
     "darkdetect",
-]
+    "cryptography",
+    "cryptography.hazmat.primitives.ciphers.aead",
+] + sc_hidden
 hiddenimports += collect_submodules("qfluentwidgets")
 
 a = Analysis(
     ["run.py"],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

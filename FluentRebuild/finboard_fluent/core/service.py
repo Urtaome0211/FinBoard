@@ -14,9 +14,13 @@ from PySide6.QtCore import QObject, Signal
 from . import csv_io
 from .backup import (
     create_backup as _create_backup,
+    create_full_backup as _create_full_backup,
     list_backups,
     quick_check,
+    recovery_drill as _recovery_drill,
     restore_backup as _restore_backup,
+    restore_full_backup as _restore_full_backup,
+    verify_full_backup as _verify_full_backup,
 )
 from .dates import today_iso
 from .insights import FixedCost, detect_fixed_costs
@@ -381,6 +385,21 @@ class FinanceService(QObject):
         _restore_backup(self.repo.db, source)
         self.rate_store = self.repo.rates
         self.changed.emit()
+
+    def create_full_backup(self, *, password: str | None = None) -> Path:
+        return _create_full_backup(self.repo.db, password=password)
+
+    def verify_full_backup(self, path: str | Path, *, password: str | None = None):
+        return _verify_full_backup(path, password=password)
+
+    def restore_full_backup(self, path: str | Path, *, password: str | None = None):
+        info = _restore_full_backup(self.repo.db, path, password=password)
+        self.rate_store = self.repo.rates
+        self.changed.emit()
+        return info
+
+    def recovery_drill(self, *, password: str | None = None):
+        return _recovery_drill(self.repo.db, password=password)
 
     def transaction_balances(
         self, transaction_ids: list[int]

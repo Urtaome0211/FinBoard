@@ -15,7 +15,7 @@ from datetime import date as date_cls
 from datetime import timedelta
 from typing import Iterable, Sequence
 
-from .database import Database
+from .database import DB_INTEGRITY_ERROR, Database
 from .dates import (
     add_months,
     days_in_month,
@@ -1510,7 +1510,7 @@ class Repository:
                 (name, type_, opening_balance, note, int(archived), currency, now_iso()),
             )
             self.conn.commit()
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERROR:
             raise ValueError("已存在同名账户") from None
         return int(cursor.lastrowid)
 
@@ -1569,7 +1569,7 @@ class Repository:
                 ),
             )
             self.conn.commit()
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERROR:
             raise ValueError("已存在同名账户") from None
 
     def get_account(self, account_id: int, *, include_archived: bool = False) -> Account:
@@ -1692,7 +1692,7 @@ class Repository:
                 (account_id, day, value, note, now_iso()),
             )
             self.conn.commit()
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERROR:
             raise ValueError("市值记录保存失败") from None
         row = self.conn.execute(
             "SELECT id FROM account_valuations WHERE account_id = ? AND date = ?",
@@ -2678,7 +2678,7 @@ class Repository:
                         (name, currency, now_iso()),
                     )
                     return self.get_account(int(cursor.lastrowid), include_archived=True)
-                except sqlite3.IntegrityError:
+                except DB_INTEGRITY_ERROR:
                     continue
         raise ValueError("无法创建定期存款账户")
 
@@ -2999,7 +2999,7 @@ class Repository:
                 (name, kind, color, now_iso()),
             )
             self.conn.commit()
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERROR:
             raise ValueError("该分类已存在") from None
         return int(cursor.lastrowid)
 
@@ -3017,7 +3017,7 @@ class Repository:
                 (new_name, new_color, category_id),
             )
             self.conn.commit()
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERROR:
             raise ValueError("该分类已存在") from None
 
     def delete_category(self, category_id: int) -> str:
@@ -4199,7 +4199,7 @@ class Repository:
                     now_iso(),
                 ),
             )
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERROR:
             raise ValueError("同名导入规则已存在") from None
         self.conn.commit()
         return int(cursor.lastrowid)
@@ -4234,7 +4234,7 @@ class Repository:
                     rule_id,
                 ),
             )
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERROR:
             raise ValueError("同名导入规则已存在") from None
         self.conn.commit()
 
@@ -5094,7 +5094,7 @@ class Repository:
                 ),
             )
             self.conn.commit()
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERROR:
             raise ValueError("同样的匹配规则已存在") from None
         return int(cursor.lastrowid)
 
@@ -5132,7 +5132,7 @@ class Repository:
                 ),
             )
             self.conn.commit()
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERROR:
             raise ValueError("同样的匹配规则已存在") from None
 
     def delete_category_rule(self, rule_id: int) -> None:

@@ -9,6 +9,10 @@ from typing import Iterator
 
 from .dates import now_iso
 from .models import DEFAULT_CATEGORIES
+from .security import DatabaseLocked, is_encrypted_file, pragma_key, sqlcipher3
+
+DB_ERROR = (sqlite3.Error,) + ((sqlcipher3.DatabaseError,) if sqlcipher3 is not None else ())
+DB_INTEGRITY_ERROR = (sqlite3.IntegrityError,) + ((sqlcipher3.IntegrityError,) if sqlcipher3 is not None else ())
 
 SCHEMA_VERSION = 19
 
@@ -608,11 +612,21 @@ CREATE INDEX IF NOT EXISTS idx_holdings_account ON holdings(account_id);
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
 
-    def __init__(self, path: str | Path | None = None, *, seed: bool = True) -> None:
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        seed: bool = True,
+        encryption_key: str | None = None,
+    ) -> None:
         if path is None:
             raise ValueError("A database path is required")
         self.path = Path(path) if str(path) != ":memory:" else Path(":memory:")
         self.seed_defaults = seed
+        self.encryption_key = encryption_key
+        self.is_encrypted = (
+            str(self.path) != ":memory:" and is_encrypted_file(self.path)
+        ) or bool(encryption_key and str(self.path) != ":memory:")
         self._conn: sqlite3.Connection | None = None
 
     # ------------------------------------------------------------------ setup
@@ -627,13 +641,29 @@ class Database:
         target = str(self.path)
         if target != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(target, timeout=15)
-        conn.row_factory = sqlite3.Row
+        encrypted = str(self.path) != ":memory:" and is_encrypted_file(self.path)
+        if encrypted:
+            if sqlcipher3 is None:
+                raise DatabaseLocked("当前安装缺少 SQLCipher，无法打开加密数据库")
+            if not self.encryption_key:
+                raise DatabaseLocked("数据库已加密，请输入密码")
+            conn = sqlcipher3.connect(target, timeout=15)
+            conn.row_factory = sqlcipher3.Row
+            conn.execute(f"PRAGMA key = \"{pragma_key(self.encryption_key)}\"")
+            try:
+                conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+            except Exception as exc:
+                conn.close()
+                raise DatabaseLocked("密码不正确或数据库文件已损坏") from exc
+        else:
+            conn = sqlite3.connect(target, timeout=15)
+            conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         if target != ":memory:":
             conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
         self._conn = conn
+        self.is_encrypted = encrypted
         self._migrate()
 
     def _migrate(self) -> None:
@@ -744,6 +774,58 @@ class Database:
 
     def execute(self, sql: str, params: tuple | list = ()) -> sqlite3.Cursor:
         return self.conn.execute(sql, params)
+
+    def checkpoint(self) -> None:
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except DB_ERROR:
+            pass
+
+    def connect_external(self, path: str | Path):
+        """Open a backup with the same encryption key as this database."""
+        target = Path(path)
+        if self.is_encrypted:
+            if sqlcipher3 is None or not self.encryption_key:
+                raise DatabaseLocked("无法以加密方式读取备份")
+            conn = sqlcipher3.connect(str(target), timeout=15)
+            conn.row_factory = sqlcipher3.Row
+            conn.execute(f"PRAGMA key = \"{pragma_key(self.encryption_key)}\"")
+            try:
+                conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+            except Exception as exc:
+                conn.close()
+                raise DatabaseLocked("密码不正确或数据库文件已损坏") from exc
+            return conn
+        conn = sqlite3.connect(str(target), timeout=15)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def backup_to(self, target: str | Path) -> None:
+        """Write a consistent copy, preserving SQLCipher encryption."""
+        target = Path(target)
+        self.checkpoint()
+        # Create the destination first, then attach the key.
+        if self.is_encrypted:
+            if sqlcipher3 is None or not self.encryption_key:
+                raise DatabaseLocked("无法创建加密备份")
+            destination = sqlcipher3.connect(str(target), timeout=15)
+            destination.execute(f"PRAGMA key = \"{pragma_key(self.encryption_key)}\"")
+        else:
+            destination = sqlite3.connect(str(target), timeout=15)
+        try:
+            self.conn.backup(destination)
+        finally:
+            destination.close()
+
+    def restore_from(self, source: str | Path) -> None:
+        """Replace this database with a verified backup."""
+        source_conn = self.connect_external(source)
+        try:
+            source_conn.backup(self.conn)
+            self.conn.commit()
+            self.conn.execute("PRAGMA foreign_keys=ON")
+        finally:
+            source_conn.close()
 
     def close(self) -> None:
         if self._conn is not None:

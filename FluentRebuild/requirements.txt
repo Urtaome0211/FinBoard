@@ -1,3 +1,5 @@
 PySide6>=6.6
 PySide6-Fluent-Widgets==1.11.3
 openpyxl>=3.1
+sqlcipher3==0.6.5
+cryptography>=42

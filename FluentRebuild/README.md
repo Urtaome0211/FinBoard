@@ -1,14 +1,14 @@
 # FinBoard Fluent · 财观
 
-FinBoard Fluent 是 [FinBoard](https://github.com/Urtaome0211/FinBoard) 的桌面界面重构版：业务层、数据层和数据库保持一致，主窗口、导航、标题栏、提示条使用 **PySide6-Fluent-Widgets** 重新搭建，视觉上更接近 Windows 11 的原生应用。5.3 把页面、对话框、表格、表单和分段控件全部换成 Fluent 组件，原生文本输入弹窗也改为 Fluent `TextPromptDialog`，并修复了深色主题切换时侧边栏短暂发白的问题。5.3.1 进一步支持 A 股、港股和美股/ETF 行情，兼容裸代码、交易所前后缀和 USD/HKD 持仓。5.4.0 汇总 Fluent 控件重写与多市场行情修复，作为正式发布版。5.4.1 修复全部卖出时持仓数量归零触发 CHECK 约束的问题，schema 升到 19。
+FinBoard Fluent 是 [FinBoard](https://github.com/Urtaome0211/FinBoard) 的桌面界面重构版：业务层、数据层和数据库保持一致，主窗口、导航、标题栏、提示条使用 **PySide6-Fluent-Widgets** 重新搭建，视觉上更接近 Windows 11 的原生应用。5.3 把页面、对话框、表格、表单和分段控件全部换成 Fluent 组件，原生文本输入弹窗也改为 Fluent `TextPromptDialog`，并修复了深色主题切换时侧边栏短暂发白的问题。5.3.1 进一步支持 A 股、港股和美股/ETF 行情，兼容裸代码、交易所前后缀和 USD/HKD 持仓。5.4.0 汇总 Fluent 控件重写与多市场行情修复，作为正式发布版。5.4.1 修复全部卖出时持仓数量归零触发 CHECK 约束的问题，schema 升到 19。5.5.0 增加可选 SQLCipher 整库加密、可校验的完整备份包、恢复演练和应用锁。
 
-- 版本：**5.4.1**
+- 版本：**5.5.0**
 - 技术栈：Python 3.10+、PySide6 6.6+、PySide6-Fluent-Widgets 1.11.3
 - 平台：Windows 10/11（macOS/Linux 可运行源码，但未做安装包验证）
-- 数据：与 FinBoard 5.0 **共用同一个 SQLite 数据库**（schema 19）
+- 数据：与 FinBoard 5.0 **共用同一个 SQLite 数据库**（schema 19）；可选 SQLCipher 加密
 - 许可：MIT
 
-> 5.4.0 已发布：[GitHub Release v5.4](https://github.com/Urtaome0211/FinBoard/releases/tag/v5.4)；5.4.1 为本地卖出修复版，尚未上传。
+> 5.4.0、5.4.1 已发布；5.5.0 为本机安全版，尚未上传 GitHub。
 
 ![总览](docs/screenshots/dashboard.png)
 
@@ -27,6 +27,11 @@ FinBoard Fluent 是 [FinBoard](https://github.com/Urtaome0211/FinBoard) 的桌�
 ![区间报表](docs/screenshots/reports-range.png)
 ![投资流水](docs/screenshots/investment-trades.png)
 ![还款记录](docs/screenshots/debt-payment.png)
+
+5.5 的安全设置与锁定界面：
+
+![安全设置](docs/screenshots/security.png)
+![应用锁](docs/screenshots/app-lock.png)
 
 ## 界面预览
 
@@ -74,6 +79,9 @@ FinBoard 5.0 的功能已经完整，但界面还是自绘 QSS 风格。5.3 把 
 - **交易模板**：在记账对话框把常用收支保存为模板，下次一键带出金额、账户、分类、对方和备注。
 - **行情**：腾讯行情可选拉取持仓现价，手动更新或启动时自动更新；缓存最近一次结果，离线时继续使用本地价，不阻塞启动。
 - **报表**：月度报表、资产负债、支出构成、标签支出、支出热力日历、固定支出体检、Excel/PDF 导出；**区间分析**支持任意日期、同比/环比、分类/标签/账户维度、保存区间预设和年度报告 PDF。
+- **安全**：可选 SQLCipher 整库加密；scrypt 派生密钥，`security.json` 只保存 salt 和 verifier；支持修改密码、关闭加密、启动解锁。
+- **完整备份**：数据库 + 附件 + 安全配置打包为 zip；支持校验、恢复和恢复演练；带密码时使用 AES-GCM。
+- **应用锁**：加密库可设置 1/5/10/30 分钟自动锁定，空闲后遮罩导航与内容，需数据库密码解锁。
 - **设置**：语言、主题、提醒、托盘、货币、分类、自动分类规则、数据目录、CSV 导入/导出、数据库备份/恢复/完整性检查；启动时如检测到索引损坏会自动先备份再 `REINDEX`。
 - **效率**：Ctrl+N 记一笔、Ctrl+Shift+N 复制上一笔、Ctrl+Alt+N 快速记账、Ctrl+F 搜索、Ctrl+Z 撤销、Ctrl+1…9 切页、托盘快速记账、记住上次账户/分类。
 - **投资**：持仓、成本/市值/浮盈、资产类别/地区、配置环图、XIRR；**逐笔交易**支持买入/卖出/分红，按 FIFO 计算已实现盈亏，持仓由流水汇总。
@@ -107,7 +115,7 @@ python run.py --version
 已构建的包位于：
 
 ```text
-build/FinBoardFluent-5.4.1-win64.zip
+build/FinBoardFluent-5.5.0-win64.zip
 ```
 
 解压后运行：
@@ -118,9 +126,9 @@ FinBoardFluent/FinBoardFluent.exe
 
 包是 one-dir 形式，必须保留同目录的 `_internal/`。
 
-大小：91,186,857 字节（约 87.0 MiB）
+大小：98,011,437 字节（约 93.5 MiB）
 
-SHA256：`be5be02eaa811c305e3e9f8e9eb4f18d58e0881e42bc4e03675d11fcadbe7217`
+SHA256：`b00c3d3edc4219da55a21ed6c60208e2a596cb7a5482a1d7d6950a6e631a0aff`
 
 ## 数据与兼容性
 
@@ -138,7 +146,7 @@ FinBoard Fluent 默认复用 FinBoard 的数据目录和数据库：
 - `FINBOARD_DATA_DIR`：覆盖数据目录
 - `FINBOARD_DB`：覆盖数据库路径
 
-数据库 schema 为 **18**，在 17 的基础上增加交易模板。两个应用可以打开同一个数据库，但建议不要同时运行；切换前先在设置页做一次备份。第一次用 Fluent 打开旧库会按迁移链升级到 18；升级前建议保留备份。
+数据库 schema 为 **19**，在 18 的基础上放开了“持仓数量必须大于 0”的约束。两个应用可以打开同一个数据库，但建议不要同时运行；切换前先在设置页做一次备份。第一次用 Fluent 打开旧库会按迁移链升级到 19；升级前建议保留备份。
 
 ## 测试
 
@@ -147,7 +155,7 @@ cd FluentRebuild
 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
 ```
 
-- 176 个测试：5.0 的 132 个业务/UI 测试 + 5 个 Fluent 壳测试 + 6 个数据可靠性 + 7 个投资流水 + 6 个负债还款 + 5 个区间报表 + 4 个交易模板 + 9 个行情 + 2 个快速记账。
+- 181 个测试：5.0 的 132 个业务/UI 测试 + 5 个 Fluent 壳测试 + 6 个数据可靠性 + 7 个投资流水 + 6 个负债还款 + 5 个区间报表 + 4 个交易模板 + 9 个行情 + 2 个快速记账 + 4 个安全 + 1 个应用锁。
 - Fluent 壳测试覆盖 13 个页面、导航切换、语言切换、主题切换与日期控件；区间报表测试覆盖汇总、同比/环比、退款冲减、分类/标签/账户维度和非法日期；行情测试覆盖 A/港/美代码归一、腾讯响应解析、币种识别、缓存与错误传播。
 - 另有离屏截图和 11 个对话框的构造冒烟（见 `build/`，不属于测试套件）。
 
@@ -172,6 +180,7 @@ dist/FinBoardFluent/_internal/
 - `collect_data_files("qfluentwidgets")`
 - `collect_submodules("qfluentwidgets")`
 - `qframelesswindow`、`darkdetect`、`PySide6.QtSvg`、`openpyxl`
+- `collect_all("sqlcipher3")`、`cryptography`
 
 ## 目录结构
 
@@ -188,7 +197,7 @@ FluentRebuild/
 │  │  └─ theme.py            # 调色板 + 页面级 QSS
 │  ├─ locales/en.json
 │  └─ resources/
-├─ tests/                    # 176 个测试
+├─ tests/                    # 181 个测试
 ├─ docs/screenshots/         # README 截图（5.3 控件重写与暗色主题）
 ├─ run.py                    # 源码启动器
 ├─ FinBoardFluent.spec       # PyInstaller 定义
@@ -209,6 +218,9 @@ FluentRebuild/
 - 行情仅支持腾讯接口覆盖的 A 股、港股、美股/ETF、正数量代码；其他市场不保证可用；不保存历史 K 线，也不做自动交易。
 - 全局快捷键仅在 Windows 注册；注册失败时自动退化为应用内 Ctrl+Alt+N。
 - 交易模板是一次性快捷填充，不是定期交易；报表支持区间/同比/环比和预设，但没有完全自由的报表设计器。
+- 数据库加密是可选项，不是默认开启；忘记密码无法找回，只能从备份恢复。
+- 附件文件本身不加密，只有放进带密码的完整备份包时才加密；应用锁只在加密库上可用。
+- 自动锁定按应用内活动计时，不读取系统空闲时间；Windows Hello 未接入。
 
 ## 致谢与许可
 

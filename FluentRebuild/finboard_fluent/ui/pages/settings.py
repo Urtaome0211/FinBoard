@@ -22,7 +22,18 @@ from PySide6.QtWidgets import (
 from ... import __app_name__, __app_name_cn__, __version__
 from ...i18n import currency_display, language, t
 from ...core.money import CURRENCIES
+from ...core.security import (
+    SecurityError,
+    encrypt_database,
+    decrypt_database,
+    change_password,
+    is_encrypted_file,
+    load_config,
+    update_config,
+    verify_config,
+)
 from ..dialogs import CategoryManagerDialog, CategoryRulesDialog, CsvImportDialog
+from ..dialogs.prompt import ask_text
 from ..localize import localize_widgets
 from ..theme import theme_mode, theme_store
 from ..widgets import (
@@ -56,6 +67,7 @@ class SettingsPage(Page):
         self._build_rates()
         self._build_quotes()
         self._build_categories()
+        self._build_security()
         self._build_data()
         self._build_about()
         self.body.addStretch(1)
@@ -247,7 +259,7 @@ class SettingsPage(Page):
 
         manual_row = self._row(
             "立即更新",
-            "只会更新填了股票/基金代码、且币种为 CNY 的持仓；网络失败不影响本地数据。",
+            "只会更新填了股票/基金代码的 CNY、USD、HKD 持仓；网络失败不影响本地数据。",
         )
         self.quote_button = ThemedButton("更新行情", "soft", "refresh")
         self.quote_button.clicked.connect(self._refresh_quotes)
@@ -316,6 +328,292 @@ class SettingsPage(Page):
         rules_row.addWidget(rules)
         card.body.addLayout(rules_row)
         self.body.addWidget(card)
+
+    def _build_security(self) -> None:
+        self.security_card = Card(padding=20, spacing=14)
+        self.security_card.add_header("安全", "整库加密、自动锁定与可验证备份")
+        self.security_status = QLabel()
+        self.security_status.setProperty("role", "muted")
+        self.security_status.setWordWrap(True)
+        self.security_card.body.addWidget(self.security_status)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        self.encryption_button = ThemedButton("启用加密", "primary", "shield")
+        self.encryption_button.clicked.connect(self._toggle_encryption)
+        self.change_button = ThemedButton("修改密码", "secondary", "lock")
+        self.change_button.clicked.connect(self._change_password)
+        self.lock_button = ThemedButton("立即锁定", "soft", "lock")
+        self.lock_button.clicked.connect(self.window.lock_now)
+        for button in (self.encryption_button, self.change_button, self.lock_button):
+            actions.addWidget(button)
+        actions.addStretch(1)
+        self.security_card.body.addLayout(actions)
+
+        auto_row = self._row(
+            "自动锁定",
+            "空闲到设定时间后锁定窗口；需要先启用数据库加密。",
+        )
+        self.auto_lock_combo = ComboBox()
+        for label, value in (
+            ("关闭", 0),
+            ("1 分钟", 1),
+            ("5 分钟", 5),
+            ("10 分钟", 10),
+            ("30 分钟", 30),
+        ):
+            self.auto_lock_combo.addItem(label, value)
+        self.auto_lock_combo.setFixedWidth(160)
+        self.auto_lock_combo.currentIndexChanged.connect(self._auto_lock_changed)
+        auto_row.addWidget(self.auto_lock_combo)
+        self.security_card.body.addLayout(auto_row)
+
+        bundle_row = self._row(
+            "完整备份包",
+            "数据库、附件与安全配置打包为 zip；可校验、恢复或做一次恢复演练。",
+        )
+        bundle_actions = QHBoxLayout()
+        bundle_actions.setSpacing(8)
+        make_bundle = ThemedButton("创建完整备份", "soft", "download")
+        verify_bundle = ThemedButton("校验备份…", "ghost", "check")
+        restore_bundle = ThemedButton("恢复完整备份…", "ghost", "database")
+        drill = ThemedButton("恢复演练", "ghost", "sparkles")
+        make_bundle.clicked.connect(self._create_bundle)
+        verify_bundle.clicked.connect(self._verify_bundle)
+        restore_bundle.clicked.connect(self._restore_bundle)
+        drill.clicked.connect(self._run_recovery_drill)
+        for button in (make_bundle, verify_bundle, restore_bundle, drill):
+            bundle_actions.addWidget(button)
+        bundle_actions.addStretch(1)
+        bundle_row.addLayout(bundle_actions)
+        self.security_card.body.addLayout(bundle_row)
+        self.body.addWidget(self.security_card)
+
+    def _update_security_labels(self) -> None:
+        config = load_config(self.service.repo.db.path)
+        encrypted = bool(config and config.get("encrypted"))
+        if encrypted:
+            self.security_status.setText(
+                t("数据库已加密（SQLCipher）。启动和解除锁定时需要密码。")
+            )
+            self.encryption_button.setText(t("关闭加密"))
+            self.encryption_button.setProperty("variant", "danger")
+            self.change_button.setVisible(True)
+            minutes = int(config.get("auto_lock_minutes", 0))
+            index = self.auto_lock_combo.findData(minutes)
+            if index >= 0:
+                self.auto_lock_combo.blockSignals(True)
+                self.auto_lock_combo.setCurrentIndex(index)
+                self.auto_lock_combo.blockSignals(False)
+        else:
+            self.security_status.setText(t("数据库未加密。启用后可防止本地文件被直接读取。"))
+            self.encryption_button.setText(t("启用加密"))
+            self.change_button.setVisible(False)
+            minutes = 0
+        self.auto_lock_combo.setEnabled(encrypted)
+        self.lock_button.setEnabled(encrypted)
+
+    def _auto_lock_changed(self, _index: int) -> None:
+        config = load_config(self.service.repo.db.path)
+        if not config or not config.get("encrypted"):
+            return
+        minutes = int(self.auto_lock_combo.currentData() or 0)
+        try:
+            update_config(self.service.repo.db.path, auto_lock_minutes=minutes)
+        except (OSError, SecurityError) as exc:
+            ConfirmDialog.alert(self, "保存失败", str(exc), icon_name="alert")
+            return
+        self.window.configure_auto_lock()
+        self.window.notify(t("自动锁定已更新"))
+
+    def _toggle_encryption(self) -> None:
+        config = load_config(self.service.repo.db.path)
+        if config and config.get("encrypted"):
+            self._disable_encryption(config)
+        else:
+            self._enable_encryption()
+
+    def _enable_encryption(self) -> None:
+        password, ok = ask_text(
+            self, title=t("启用数据库加密"), label=t("设置数据库密码（至少 6 位）"), password=True
+        )
+        if not ok:
+            return
+        if len(password) < 6:
+            ConfirmDialog.alert(self, "密码太短", t("密码至少需要 6 位。"), icon_name="alert")
+            return
+        confirm, ok = ask_text(
+            self, title=t("确认密码"), label=t("再次输入数据库密码"), password=True
+        )
+        if not ok or confirm != password:
+            ConfirmDialog.alert(self, "密码不一致", t("两次输入的密码不一致。"), icon_name="alert")
+            return
+        if not ConfirmDialog.confirm(
+            self,
+            "启用数据库加密？",
+            "数据库将被关闭并加密，随后应用退出；重新打开时需要输入密码。",
+            ok_text="启用",
+            icon_name="shield",
+        ):
+            return
+        path = Path(self.service.repo.db.path)
+        try:
+            self.window.shutdown()
+            self.service.repo.db.close()
+            encrypt_database(path, password)
+        except (OSError, ValueError, SecurityError) as exc:
+            ConfirmDialog.alert(self, "加密失败", str(exc), icon_name="alert")
+            QApplication.quit()
+            return
+        ConfirmDialog.alert(
+            self,
+            "数据库已加密",
+            "应用将退出。请重新打开 FinBoard，并输入刚才设置的密码。",
+            icon_name="shield",
+        )
+        QApplication.quit()
+
+    def _disable_encryption(self, config: dict) -> None:
+        password, ok = ask_text(
+            self, title=t("关闭数据库加密"), label=t("请输入当前数据库密码"), password=True
+        )
+        if not ok or not verify_config(config, password):
+            if ok:
+                ConfirmDialog.alert(self, "密码不正确", t("密码不正确。"), icon_name="alert")
+            return
+        if not ConfirmDialog.confirm(
+            self,
+            "关闭数据库加密？",
+            "数据库将恢复为普通 SQLite 文件，任何能访问该文件的人都能读取。",
+            ok_text="关闭加密",
+            danger=True,
+            icon_name="database",
+        ):
+            return
+        path = Path(self.service.repo.db.path)
+        try:
+            self.window.shutdown()
+            self.service.repo.db.close()
+            decrypt_database(path, password)
+        except (OSError, ValueError, SecurityError) as exc:
+            ConfirmDialog.alert(self, "关闭加密失败", str(exc), icon_name="alert")
+            QApplication.quit()
+            return
+        ConfirmDialog.alert(self, "已关闭加密", "应用将退出，重新打开后无需密码。", icon_name="database")
+        QApplication.quit()
+
+    def _change_password(self) -> None:
+        config = load_config(self.service.repo.db.path)
+        if not config or not config.get("encrypted"):
+            return
+        old, ok = ask_text(self, title=t("修改密码"), label=t("当前密码"), password=True)
+        if not ok:
+            return
+        if not verify_config(config, old):
+            ConfirmDialog.alert(self, "密码不正确", t("密码不正确。"), icon_name="alert")
+            return
+        new, ok = ask_text(self, title=t("修改密码"), label=t("新密码（至少 6 位）"), password=True)
+        if not ok or len(new) < 6:
+            if ok:
+                ConfirmDialog.alert(self, "密码太短", t("密码至少需要 6 位。"), icon_name="alert")
+            return
+        confirm, ok = ask_text(self, title=t("修改密码"), label=t("再次输入新密码"), password=True)
+        if not ok or confirm != new:
+            ConfirmDialog.alert(self, "密码不一致", t("两次输入的密码不一致。"), icon_name="alert")
+            return
+        path = Path(self.service.repo.db.path)
+        try:
+            self.window.shutdown()
+            self.service.repo.db.close()
+            change_password(path, old, new)
+        except (OSError, ValueError, SecurityError) as exc:
+            ConfirmDialog.alert(self, "修改失败", str(exc), icon_name="alert")
+            QApplication.quit()
+            return
+        ConfirmDialog.alert(self, "密码已修改", "应用将退出，请使用新密码重新打开。", icon_name="lock")
+        QApplication.quit()
+
+    def _create_bundle(self) -> None:
+        try:
+            path = self.service.create_full_backup()
+        except (OSError, ValueError) as exc:
+            ConfirmDialog.alert(self, "备份失败", str(exc), icon_name="alert")
+            return
+        self.window.notify(t("完整备份已创建：{name}", name=path.name))
+
+    def _verify_bundle(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "校验完整备份", str(self.data_folder), "FinBoard 备份 (*.zip *.fbk)"
+        )
+        if not path:
+            return
+        password = None
+        if path.lower().endswith(".fbk"):
+            password, ok = ask_text(self, title=t("备份密码"), label=t("请输入备份包密码"), password=True)
+            if not ok:
+                return
+        try:
+            info = self.service.verify_full_backup(path, password=password)
+        except (OSError, ValueError) as exc:
+            ConfirmDialog.alert(self, "校验失败", str(exc), icon_name="alert")
+            return
+        manifest = info.get("manifest", {})
+        ConfirmDialog.alert(
+            self,
+            "备份校验通过",
+            t(
+                "创建时间：{time}\n文件数：{files}\n附件：{attachments}",
+                time=manifest.get("created_at", ""),
+                files=len(manifest.get("files", [])),
+                attachments=manifest.get("attachment_count", 0),
+            ),
+            icon_name="check",
+        )
+
+    def _restore_bundle(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "恢复完整备份", str(self.data_folder), "FinBoard 备份 (*.zip *.fbk)"
+        )
+        if not path:
+            return
+        password = None
+        if path.lower().endswith(".fbk"):
+            password, ok = ask_text(self, title=t("备份密码"), label=t("请输入备份包密码"), password=True)
+            if not ok:
+                return
+        if not ConfirmDialog.confirm(
+            self,
+            "恢复完整备份？",
+            "当前数据库与附件会被备份包覆盖。恢复前会自动创建数据库快照。",
+            ok_text="恢复",
+            danger=True,
+            icon_name="database",
+        ):
+            return
+        try:
+            self.service.restore_full_backup(path, password=password)
+        except (OSError, ValueError) as exc:
+            ConfirmDialog.alert(self, "恢复失败", str(exc), icon_name="alert")
+            return
+        self.window.refresh_all()
+        self._update_backup_label()
+        self.window.notify(t("已恢复完整备份"))
+
+    def _run_recovery_drill(self) -> None:
+        try:
+            info = self.service.recovery_drill()
+        except (OSError, ValueError) as exc:
+            ConfirmDialog.alert(self, "恢复演练失败", str(exc), icon_name="alert")
+            return
+        ConfirmDialog.alert(
+            self,
+            "恢复演练通过",
+            t(
+                "临时恢复并打开成功，交易数：{count}",
+                count=info.get("transactions", 0),
+            ),
+            icon_name="check",
+        )
 
     def _build_data(self) -> None:
         card = Card(padding=20, spacing=14)
@@ -446,6 +744,7 @@ class SettingsPage(Page):
         self._update_rate_labels()
         self._update_quote_labels()
         self._update_backup_label()
+        self._update_security_labels()
 
     def _sync_theme(self) -> None:
         mode = theme_mode()

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from datetime import date
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QSettings, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
@@ -29,11 +30,13 @@ from qfluentwidgets import (
 from ..core.dates import month_of, today
 from ..core.models import Account, Transaction
 from ..core.rates import RateSnapshot, RateStore
+from ..core.security import load_config, verify_config
 from ..i18n import is_english, language, set_language as set_ui_language, t
 from .dialogs import AccountDialog, QuickEntryDialog, TransactionDialog
 from .hotkeys import GlobalHotkey
 from .icons import app_icon
 from .localize import apply_locale, localize_widgets
+from .lock import UnlockOverlay
 from .pages import (
     AccountsPage,
     BudgetsPage,
@@ -143,6 +146,11 @@ class MainWindow(FluentWindow):
         self._tray_hint_shown = False
         self._hotkey: GlobalHotkey | None = None
         self._hotkey_registered = False
+        self._lock_overlay: UnlockOverlay | None = None
+        self._lock_timer = QTimer(self)
+        self._lock_timer.setInterval(30_000)
+        self._lock_timer.timeout.connect(self._check_auto_lock)
+        self._last_activity = time.monotonic()
 
         set_ui_language(language or str(self.settings.value("language", "zh")))
         apply_locale()
@@ -197,7 +205,80 @@ class MainWindow(FluentWindow):
         QTimer.singleShot(1200, self._auto_refresh_rates)
         QTimer.singleShot(1200, self._check_reminders)
         QTimer.singleShot(2200, self._auto_refresh_quotes)
+        self._setup_app_lock()
         MainWindow._live = self
+
+    # ------------------------------------------------------------- app lock
+    def _setup_app_lock(self) -> None:
+        self.configure_auto_lock()
+        QApplication.instance().installEventFilter(self)
+
+    def configure_auto_lock(self) -> None:
+        self._lock_timer.stop()
+        config = load_config(self.service.repo.db.path)
+        if config and config.get("encrypted") and int(config.get("auto_lock_minutes", 0)) > 0:
+            self._lock_timer.start()
+
+    def _check_auto_lock(self) -> None:
+        if self._lock_overlay is not None:
+            return
+        config = load_config(self.service.repo.db.path)
+        if not config or not config.get("encrypted"):
+            return
+        minutes = int(config.get("auto_lock_minutes", 0))
+        if minutes <= 0:
+            return
+        if time.monotonic() - self._last_activity >= minutes * 60:
+            self.lock_now()
+
+    def lock_now(self) -> None:
+        if self._lock_overlay is not None:
+            return
+        config = load_config(self.service.repo.db.path)
+        if not config or not config.get("encrypted"):
+            self.notify(t("请先在设置中启用数据库加密"))
+            return
+        self.titleBar.hide()
+        self.navigationInterface.hide()
+        overlay = UnlockOverlay(self)
+        overlay.setGeometry(self.rect())
+        overlay.submitted.connect(self._try_unlock)
+        overlay.show()
+        overlay.raise_()
+        overlay.input.setFocus()
+        self._lock_overlay = overlay
+
+    def _try_unlock(self, password: str) -> None:
+        config = load_config(self.service.repo.db.path)
+        if verify_config(config, password):
+            overlay = self._lock_overlay
+            self._lock_overlay = None
+            if overlay is not None:
+                overlay.hide()
+                overlay.deleteLater()
+            self.titleBar.show()
+            self.navigationInterface.show()
+            self._last_activity = time.monotonic()
+            return
+        if self._lock_overlay is not None:
+            self._lock_overlay.show_error(t("密码不正确"))
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if event.type() in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.KeyPress,
+            QEvent.Type.Wheel,
+            QEvent.Type.TouchBegin,
+        ):
+            self._last_activity = time.monotonic()
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        overlay = getattr(self, "_lock_overlay", None)
+        if overlay is not None:
+            overlay.setGeometry(self.rect())
 
     # ------------------------------------------------------------------ UI
     def _build_navigation(self) -> None:
@@ -476,6 +557,12 @@ class MainWindow(FluentWindow):
 
     def _quit_from_tray(self) -> None:
         self._quitting = True
+        self._lock_timer.stop()
+        QApplication.instance().removeEventFilter(self)
+        if self._lock_overlay is not None:
+            self._lock_overlay.hide()
+            self._lock_overlay.deleteLater()
+            self._lock_overlay = None
         if self._tray is not None:
             self._tray.hide()
         QApplication.quit()
@@ -727,6 +814,12 @@ class MainWindow(FluentWindow):
     def shutdown(self) -> None:
         """Stop background work before the application exits."""
         self._quitting = True
+        self._lock_timer.stop()
+        QApplication.instance().removeEventFilter(self)
+        if self._lock_overlay is not None:
+            self._lock_overlay.hide()
+            self._lock_overlay.deleteLater()
+            self._lock_overlay = None
         if self._tray is not None:
             self._tray.hide()
             self._tray = None
