@@ -8,7 +8,7 @@ FinBoard Fluent 是 [FinBoard](https://github.com/Urtaome0211/FinBoard) 的桌�
 - 数据：与 FinBoard 5.0 **共用同一个 SQLite 数据库**（schema 19）；可选 SQLCipher 加密
 - 许可：MIT
 
-> 5.4.0、5.4.1 已发布；5.5.0 为本机安全版，尚未上传 GitHub。
+> 5.4.0、5.4.1、5.5.0 均已发布到 GitHub Releases。
 
 ![总览](docs/screenshots/dashboard.png)
 
