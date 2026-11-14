@@ -47,7 +47,7 @@ class FluentShellTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_all_pages_and_navigation(self) -> None:
-        self.assertEqual(len(self.window.pages), 13)
+        self.assertEqual(len(self.window.pages), 14)
         for key in self.window.pages:
             self.window.navigate(key)
             self.assertIs(self.window.stackedWidget.currentWidget(), self.window.pages[key])

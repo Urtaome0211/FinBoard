@@ -267,21 +267,14 @@ class RecurringPage(Page):
         self.window.notify(t("已入账「{name}」", name=rule.name))
 
     def _post_all(self) -> None:
-        day = today_iso()
-        count = 0
         try:
-            for rule in self.service.repo.due_recurring(day):
-                for _ in range(120):
-                    current = self.service.repo.get_recurring(rule.id)
-                    if not current.active or current.next_date > day:
-                        break
-                    self.service.post_recurring(rule.id)
-                    count += 1
+            count = self.service.post_all_due_recurring()
         except ValueError as exc:
             ConfirmDialog.alert(self, t("无法入账"), str(exc), icon_name="alert")
+            return
         if count:
             self.window.notify(t("已入账 {count} 笔定期交易", count=count))
-
+            self.reload()
     def _toggle(self, rule) -> None:
         self.service.set_recurring_active(rule.id, not rule.active)
         self.window.notify(

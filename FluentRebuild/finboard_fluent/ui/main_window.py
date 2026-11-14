@@ -44,6 +44,7 @@ from .pages import (
     DebtsPage,
     FixedAssetsPage,
     ForecastPage,
+    InsightsPage,
     PlannedPage,
     ReceivablesPage,
     RecurringPage,
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
 
 NAV_ITEMS = [
     ("dashboard", "总览"),
+    ("insights", "洞察"),
     ("transactions", "收支明细"),
     ("accounts", "账户"),
     ("debts", "负债"),
@@ -74,6 +76,7 @@ NAV_ITEMS = [
 
 NAV_ICONS = {
     "dashboard": FluentIcon.HOME,
+    "insights": FluentIcon.HEART,
     "transactions": FluentIcon.DOCUMENT,
     "accounts": FluentIcon.FOLDER,
     "debts": FluentIcon.CERTIFICATE,
@@ -173,6 +176,7 @@ class MainWindow(FluentWindow):
         self.stack = self.stackedWidget
         self.pages: dict[str, QWidget] = {
             "dashboard": DashboardPage(self.service, self),
+            "insights": InsightsPage(self.service, self),
             "transactions": TransactionsPage(self.service, self),
             "accounts": AccountsPage(self.service, self),
             "debts": DebtsPage(self.service, self),

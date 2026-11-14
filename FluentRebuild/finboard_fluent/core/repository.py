@@ -5425,7 +5425,7 @@ class Repository:
                             int(row["amount"]), source, target.currency, row["date"]
                         )
                     fee = self.withdrawal_fee(int(row["account_id"]), int(posted))
-                conn.execute(
+                cursor = conn.execute(
                     "INSERT INTO transactions (date, kind, amount, currency,"
                     " account_amount, to_amount, fee, category_id, account_id,"
                     " to_account_id, payee, note, import_hash, created_at)"
@@ -5447,6 +5447,9 @@ class Repository:
                         now_iso(),
                     ),
                 )
+                tags = row.get("tags") or []
+                if tags:
+                    self._replace_tags(int(cursor.lastrowid), list(tags))
                 count += 1
         return count
 

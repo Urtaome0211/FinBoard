@@ -221,6 +221,7 @@ def import_csv(
     rule: CsvRule | None = None,
     dedup: bool = True,
     default_account_id: int | None = None,
+    apply_rules: bool = True,
 ) -> ImportResult:
     """Validate every row, then import the good ones in a single transaction."""
     text = _decode(Path(path).read_bytes())
@@ -314,6 +315,7 @@ def import_csv(
                 raise ValueError(str(exc)) from None
 
             category_id = None
+            category_explicit = False
             to_account_id = None
             to_amount = None
             target_name = ""
@@ -339,6 +341,7 @@ def import_csv(
                         raise ValueError(str(exc)) from None
             else:
                 category_name = value(row, "category")
+                category_explicit = bool(category_name)
                 category = categories.get((category_name.casefold(), kind))
                 if category is None and category_name:
                     for (name, category_kind), candidate in categories.items():
@@ -355,6 +358,14 @@ def import_csv(
                 category_id = category.id
 
             payee = value(row, "payee")[:60]
+            rule_hit = None
+            rule_tags: list[str] = []
+            if apply_rules and kind != "transfer" and payee and not category_explicit:
+                matched = repo.match_category_rule(payee, kind)
+                if matched is not None:
+                    category_id = matched.category_id
+                    rule_tags = list(matched.tags)
+                    rule_hit = matched.id
             import_hash = _import_hash(
                 date_value,
                 kind,
@@ -394,6 +405,8 @@ def import_csv(
                     "payee": payee,
                     "note": value(row, "note")[:200],
                     "import_hash": import_hash if dedup else None,
+                    "tags": rule_tags,
+                    "rule_hit": rule_hit,
                 }
             )
         except ValueError as exc:
@@ -403,4 +416,8 @@ def import_csv(
 
     if prepared:
         result.imported = repo.insert_normalized(prepared)
+        for row in prepared:
+            rule_id = row.get("rule_hit")
+            if rule_id:
+                repo.record_rule_hit(int(rule_id))
     return result

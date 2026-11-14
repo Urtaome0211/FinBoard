@@ -23,7 +23,7 @@ from .backup import (
     verify_full_backup as _verify_full_backup,
 )
 from .dates import today_iso
-from .insights import FixedCost, detect_fixed_costs
+from .insights import FinancialHealth, FixedCost, detect_fixed_costs, financial_health
 from .models import (
     AccountValuation,
     Attachment,
@@ -545,6 +545,23 @@ class FinanceService(QObject):
         self.changed.emit()
         return transaction_id
 
+    def post_all_due_recurring(self, day: str | None = None) -> int:
+        day = day or today_iso()
+        count = 0
+        for rule in self.repo.due_recurring(day):
+            for _ in range(120):
+                current = self.repo.get_recurring(rule.id)
+                if not current.active or current.next_date > day:
+                    break
+                self.repo.post_recurring(rule.id)
+                count += 1
+        if count:
+            self.changed.emit()
+        return count
+
+    def planned_transactions(self, *, status: str | None = None):
+        return self.repo.planned_transactions(status=status)
+
     # ---------------------------------------------------------- reconciliation
     def reconciliations(
         self, account_id: int, *, limit: int = 50
@@ -604,6 +621,9 @@ class FinanceService(QObject):
 
     def fixed_costs(self, months: int = 12) -> list[FixedCost]:
         return detect_fixed_costs(self.repo.expense_history(months))
+
+    def financial_health(self, month: str | None = None) -> FinancialHealth:
+        return financial_health(self.repo, month)
 
     def tag_breakdown(self, month: str | None = None, kind: str = "expense"):
         return self.repo.tag_breakdown(month, kind)
@@ -720,6 +740,7 @@ class FinanceService(QObject):
         rule: CsvRule | None = None,
         dedup: bool = True,
         default_account_id: int | None = None,
+        apply_rules: bool = True,
     ) -> ImportResult:
         result = csv_io.import_csv(
             self.repo,
@@ -727,6 +748,7 @@ class FinanceService(QObject):
             rule=rule,
             dedup=dedup,
             default_account_id=default_account_id,
+            apply_rules=apply_rules,
         )
         if result.imported:
             self.changed.emit()

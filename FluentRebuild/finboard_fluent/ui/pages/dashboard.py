@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from ...core.dates import month_label, month_of, today
+from ...core.dates import month_label, month_of, today, today_iso
 from ...i18n import category_display, t, today_label
 from ...core.models import BudgetLine
 from ...core.money import percentage
@@ -16,6 +16,7 @@ from ..rows import TransactionRow
 from ..theme import colors, tone_for_ratio
 from ..widgets import (
     Card,
+    ConfirmDialog,
     EmptyState,
     Page,
     PageHeader,
@@ -57,6 +58,25 @@ class DashboardPage(Page):
         ):
             stats.addWidget(card, 1)
         self.body.addLayout(stats)
+
+        self.todo_card = Card(padding=16, spacing=8)
+        todo_top = QHBoxLayout()
+        todo_top.setSpacing(12)
+        self.todo_label = QLabel()
+        self.todo_label.setProperty("role", "muted")
+        todo_top.addWidget(self.todo_label, 1)
+        self.post_button = ThemedButton("一键入账", "primary", "arrow-right")
+        self.post_button.clicked.connect(self._post_all_due)
+        todo_top.addWidget(self.post_button)
+        planned_button = ThemedButton("查看计划", "secondary")
+        planned_button.clicked.connect(lambda: self.window.navigate("planned"))
+        todo_top.addWidget(planned_button)
+        savings_button = ThemedButton("查看存款", "secondary")
+        savings_button.clicked.connect(lambda: self.window.navigate("savings"))
+        todo_top.addWidget(savings_button)
+        self.todo_card.body.addLayout(todo_top)
+        self.todo_card.hide()
+        self.body.addWidget(self.todo_card)
 
         middle = QHBoxLayout()
         middle.setSpacing(18)
@@ -208,6 +228,38 @@ class DashboardPage(Page):
         self.networth_chart.set_data(self.service.repo.net_worth_history(12))
         self._refresh_recent()
         self._refresh_budget()
+        self._refresh_todo()
+
+    def _refresh_todo(self) -> None:
+        due = self.service.repo.due_recurring()
+        matured = self.service.repo.matured_term_deposits()
+        today = today_iso()
+        planned = [
+            item
+            for item in self.service.repo.planned_transactions(status="planned")
+            if item.date <= today
+        ]
+        parts: list[str] = []
+        if due:
+            parts.append(t("待确认定期 {count}", count=len(due)))
+        if matured:
+            parts.append(t("到期存款 {count}", count=len(matured)))
+        if planned:
+            parts.append(t("到期计划 {count}", count=len(planned)))
+        self.todo_card.setVisible(bool(parts))
+        if parts:
+            self.todo_label.setText(t("待办 · {items}", items=" · ".join(parts)))
+        self.post_button.setVisible(bool(due))
+
+    def _post_all_due(self) -> None:
+        try:
+            count = self.service.post_all_due_recurring()
+        except ValueError as exc:
+            ConfirmDialog.alert(self, t("无法入账"), str(exc), icon_name="alert")
+            return
+        if count:
+            self.window.notify(t("已入账 {count} 笔定期交易", count=count))
+        self.refresh()
 
     def header_month(self) -> str:
         return month_of(today())

@@ -6,6 +6,7 @@ from .dashboard import DashboardPage
 from .debts import DebtsPage
 from .fixed_assets import FixedAssetsPage
 from .forecast import ForecastPage
+from .insights import InsightsPage
 from .planned import PlannedPage
 from .receivables import ReceivablesPage
 from .recurring import RecurringPage
@@ -21,6 +22,7 @@ __all__ = [
     "DebtsPage",
     "FixedAssetsPage",
     "ForecastPage",
+    "InsightsPage",
     "PlannedPage",
     "ReceivablesPage",
     "RecurringPage",
