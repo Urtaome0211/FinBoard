@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...core.dates import days_in_month, month_label, month_of, today
+from ...core.dates import days_in_month, month_label, month_of, shift_month, today
 from ...core.models import BudgetLine
 from ...i18n import category_display, t
 from ..dialogs import BudgetDialog
@@ -118,6 +118,9 @@ class BudgetsPage(Page):
         self.month_combo.set_month(month_of(today()))
         self.month_combo.currentIndexChanged.connect(lambda _index: self.refresh())
         header.add_action(self.month_combo)
+        copy_button = ThemedButton("复制上月", "ghost", "copy")
+        copy_button.clicked.connect(self._copy_previous)
+        header.add_action(copy_button)
         add_button = ThemedButton("设置预算", "primary", "plus")
         add_button.clicked.connect(self._add)
         header.add_action(add_button)
@@ -173,6 +176,14 @@ class BudgetsPage(Page):
     @property
     def month(self) -> str:
         return self.month_combo.current_month() or month_of(today())
+
+    def restore_view(self) -> None:
+        saved = self.service.view_state("budgets:month")
+        if saved:
+            self.month_combo.set_month(saved)
+
+    def remember_view(self) -> None:
+        self.service.set_view_state("budgets:month", self.month)
 
     def refresh(self) -> None:
         month = self.month
@@ -334,6 +345,17 @@ class BudgetsPage(Page):
         self.alert.show()
 
     # ------------------------------------------------------------------
+    def _copy_previous(self) -> None:
+        source = shift_month(self.month, -1)
+        count = self.service.copy_budgets(source, self.month)
+        if count:
+            self.window.notify(
+                t("已从 {month} 复制 {count} 条预算", month=month_label(source), count=count)
+            )
+        else:
+            self.window.notify(t("没有可复制的预算，或本月已全部存在"))
+        self.refresh()
+
     def _add(self) -> None:
         BudgetDialog(self.service, self.month, parent=self.window).exec()
 

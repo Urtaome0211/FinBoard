@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date as date_cls
+from datetime import datetime, timedelta
 from pathlib import Path
 import json
 import shutil
@@ -25,6 +26,7 @@ from .backup import (
 from .dates import today_iso
 from .insights import FinancialHealth, FixedCost, detect_fixed_costs, financial_health
 from .models import (
+    AppNotification,
     AccountValuation,
     Attachment,
     BulkResult,
@@ -331,8 +333,20 @@ class FinanceService(QObject):
         kind: str,
         category_id: int,
         tags: list[str] | None = None,
+        *,
+        amount_min: int | None = None,
+        amount_max: int | None = None,
+        account_id: int | None = None,
     ) -> int:
-        rule_id = self.repo.add_category_rule(pattern, kind, category_id, tags)
+        rule_id = self.repo.add_category_rule(
+            pattern,
+            kind,
+            category_id,
+            tags,
+            amount_min=amount_min,
+            amount_max=amount_max,
+            account_id=account_id,
+        )
         self.changed.emit()
         return rule_id
 
@@ -343,9 +357,18 @@ class FinanceService(QObject):
         pattern: str | None = None,
         category_id: int | None = None,
         tags: list[str] | None = None,
+        amount_min: int | None = None,
+        amount_max: int | None = None,
+        account_id: int | None = None,
     ) -> None:
         self.repo.update_category_rule(
-            rule_id, pattern=pattern, category_id=category_id, tags=tags
+            rule_id,
+            pattern=pattern,
+            category_id=category_id,
+            tags=tags,
+            amount_min=amount_min,
+            amount_max=amount_max,
+            account_id=account_id,
         )
         self.changed.emit()
 
@@ -353,8 +376,17 @@ class FinanceService(QObject):
         self.repo.delete_category_rule(rule_id)
         self.changed.emit()
 
-    def match_category_rule(self, payee: str, kind: str) -> CategoryRule | None:
-        return self.repo.match_category_rule(payee, kind)
+    def match_category_rule(
+        self,
+        payee: str,
+        kind: str,
+        *,
+        amount: int | None = None,
+        account_id: int | None = None,
+    ) -> CategoryRule | None:
+        return self.repo.match_category_rule(
+            payee, kind, amount=amount, account_id=account_id
+        )
 
     def record_rule_hit(self, rule_id: int) -> None:
         self.repo.record_rule_hit(rule_id)
@@ -559,6 +591,132 @@ class FinanceService(QObject):
             self.changed.emit()
         return count
 
+    def auto_post_recurring(self, day: str | None = None) -> int:
+        posted = self.repo.auto_post_recurring(day)
+        if posted:
+            self.changed.emit()
+            self.repo.add_notification(
+                f"auto-post:{today_iso()}:{posted}",
+                "info",
+                "定期账目已自动入账",
+                f"共 {posted} 笔，已写入收支",
+                "recurring",
+            )
+        return posted
+
+    # --------------------------------------------------------- notifications
+    def notifications(self, *, limit: int = 50) -> list[AppNotification]:
+        return self.repo.notifications(limit=limit)
+
+    def unread_notifications(self) -> int:
+        return self.repo.unread_notification_count()
+
+    def mark_notification_read(self, notification_id: int) -> None:
+        self.repo.mark_notification_read(notification_id)
+
+    def mark_all_notifications_read(self) -> None:
+        self.repo.mark_all_notifications_read()
+        self.changed.emit()
+
+    def clear_notifications(self) -> None:
+        self.repo.clear_read_notifications()
+        self.changed.emit()
+
+    def refresh_alerts(self, day: str | None = None) -> int:
+        """Turn currently due items into idempotent notifications."""
+        day = day or today_iso()
+        horizon = (date_cls.fromisoformat(day) + timedelta(days=7)).isoformat()
+        created = 0
+
+        def add(key: str, kind: str, title: str, body: str, link: str) -> None:
+            nonlocal created
+            created += int(self.repo.add_notification(key, kind, title, body, link))
+
+        for rule in self.repo.due_recurring(day):
+            if rule.auto_post:
+                continue
+            add(
+                f"recurring:{rule.id}:{rule.next_date}",
+                "due",
+                f"待确认定期账目：{rule.title}",
+                f"{rule.next_date} 到期，确认后写入收支",
+                "recurring",
+            )
+        for item in self.repo.planned_transactions(status="planned"):
+            if day <= item.date <= horizon:
+                add(
+                    f"planned:{item.id}:{item.date}",
+                    "planned",
+                    f"计划支出临近：{item.title if hasattr(item, 'title') else item.payee or item.category_name}",
+                    f"{item.date} · 待确认",
+                    "planned",
+                )
+        for item in self.repo.receivables(status="open"):
+            if item.due_date and item.due_date < day:
+                add(
+                    f"receivable:{item.id}:{item.due_date}",
+                    "overdue",
+                    f"逾期未结：{item.counterparty}",
+                    f"应结日 {item.due_date}",
+                    "receivables",
+                )
+        for line in self.repo.budget_lines(day[:7]):
+            budget = line.amount + line.rollover
+            if budget > 0 and line.spent > budget:
+                add(
+                    f"budget:{day[:7]}:{line.category_id}",
+                    "budget",
+                    f"预算超支：{line.name}",
+                    f"已用 {line.spent / 100:.2f} / 预算 {budget / 100:.2f}",
+                    "budgets",
+                )
+        for goal in self.repo.savings_goals():
+            forecast = self.repo.savings_goal_forecast(goal.id)
+            if forecast["remaining"] and not forecast["on_track"]:
+                add(
+                    f"goal:{goal.id}:{goal.target_date}",
+                    "goal",
+                    f"储蓄目标可能延期：{goal.name}",
+                    "按近 3 个月结余速度，预计无法在目标日前达成",
+                    "savings",
+                )
+        return created
+
+    # ------------------------------------------------------------- budgeting
+    def copy_budgets(self, from_month: str, to_month: str) -> int:
+        copied = self.repo.copy_budgets(from_month, to_month)
+        if copied:
+            self.changed.emit()
+        return copied
+
+    def monthly_surplus(self, months: int = 3) -> int:
+        return self.repo.average_monthly_surplus(months)
+
+    # ---------------------------------------------------------------- savings
+    def savings_goal_forecast(self, goal_id: int) -> dict[str, object]:
+        return self.repo.savings_goal_forecast(goal_id)
+
+    # ----------------------------------------------------------- data health
+    def health_checks(self) -> list[dict[str, object]]:
+        return self.repo.data_health()
+
+    # ------------------------------------------------------------ view state
+    def view_state(self, key: str) -> str:
+        return self.repo.meta_get(f"view:{key}", "")
+
+    def set_view_state(self, key: str, value: str) -> None:
+        self.repo.meta_set(f"view:{key}", value)
+
+    # -------------------------------------------------------------- investing
+    def benchmark_rate_bp(self) -> int:
+        try:
+            return int(self.repo.meta_get("invest:benchmark_bp", "0") or 0)
+        except ValueError:
+            return 0
+
+    def set_benchmark_rate_bp(self, bp: int) -> None:
+        self.repo.meta_set("invest:benchmark_bp", str(int(bp)))
+        self.changed.emit()
     def planned_transactions(self, *, status: str | None = None):
         return self.repo.planned_transactions(status=status)
 

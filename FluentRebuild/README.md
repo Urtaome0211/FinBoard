@@ -1,14 +1,14 @@
 # FinBoard Fluent · 财观
 
-FinBoard Fluent 是 [FinBoard](https://github.com/Urtaome0211/FinBoard) 的桌面界面重构版：业务层、数据层和数据库保持一致，主窗口、导航、标题栏、提示条使用 **PySide6-Fluent-Widgets** 重新搭建，视觉上更接近 Windows 11 的原生应用。5.3 把页面、对话框、表格、表单和分段控件全部换成 Fluent 组件，原生文本输入弹窗也改为 Fluent `TextPromptDialog`，并修复了深色主题切换时侧边栏短暂发白的问题。5.3.1 进一步支持 A 股、港股和美股/ETF 行情，兼容裸代码、交易所前后缀和 USD/HKD 持仓。5.4.0 汇总 Fluent 控件重写与多市场行情修复，作为正式发布版。5.4.1 修复全部卖出时持仓数量归零触发 CHECK 约束的问题，schema 升到 19。5.5.0 增加可选 SQLCipher 整库加密、可校验的完整备份包、恢复演练和应用锁。5.6.0 把到期的定期/计划集中成待办并支持一键入账，同时新增财务洞察页。
+FinBoard Fluent 是 [FinBoard](https://github.com/Urtaome0211/FinBoard) 的桌面界面重构版：业务层、数据层和数据库保持一致，主窗口、导航、标题栏、提示条使用 **PySide6-Fluent-Widgets** 重新搭建，视觉上更接近 Windows 11 的原生应用。5.3 把页面、对话框、表格、表单和分段控件全部换成 Fluent 组件，原生文本输入弹窗也改为 Fluent `TextPromptDialog`，并修复了深色主题切换时侧边栏短暂发白的问题。5.3.1 进一步支持 A 股、港股和美股/ETF 行情，兼容裸代码、交易所前后缀和 USD/HKD 持仓。5.4.0 汇总 Fluent 控件重写与多市场行情修复，作为正式发布版。5.4.1 修复全部卖出时持仓数量归零触发 CHECK 约束的问题，schema 升到 19。5.5.0 增加可选 SQLCipher 整库加密、可校验的完整备份包、恢复演练和应用锁。5.6.0 把到期的定期/计划集中成待办并支持一键入账，同时新增财务洞察页。5.7.0 增加通知中心、定期交易自动入账、分类规则金额/账户筛选、储蓄目标预测、预算一键复制、投资基准对比、数据体检页、视图状态记忆与数据库恢复密钥。
 
-- 版本：**5.6.0**
+- 版本：**5.7.0**
 - 技术栈：Python 3.10+、PySide6 6.6+、PySide6-Fluent-Widgets 1.11.3
 - 平台：Windows 10/11（macOS/Linux 可运行源码，但未做安装包验证）
-- 数据：与 FinBoard 5.0 **共用同一个 SQLite 数据库**（schema 19）；可选 SQLCipher 加密
+- 数据：与 FinBoard 5.0 **共用同一个 SQLite 数据库**（schema 20）；可选 SQLCipher 加密
 - 许可：MIT
 
-> 5.4.0、5.4.1、5.5.0 均已发布到 GitHub Releases。
+> 5.4.0、5.4.1、5.5.0、5.6.0 均已发布到 GitHub Releases。
 
 ![总览](docs/screenshots/dashboard.png)
 
@@ -60,7 +60,7 @@ FinBoard Fluent 是 [FinBoard](https://github.com/Urtaome0211/FinBoard) 的桌�
 
 FinBoard 5.0 的功能已经完整，但界面还是自绘 QSS 风格。5.3 把 Fluent 化推进到控件层：
 
-- 用 `FluentWindow` + `NavigationInterface` 搭建主壳，保留 14 个页面和全部快捷键。
+- 用 `FluentWindow` + `NavigationInterface` 搭建主壳，保留 15 个页面和全部快捷键。
 - 标题栏嵌入 Fluent 搜索框、主按钮、币种按钮和主题按钮；提示统一用 `InfoBar`。
 - 页面、对话框、表格、输入框、下拉框、日期选择、分段控件全部通过 `fluent_controls` / `widgets` 兼容层换成 qfluentwidgets 组件。
 - 卡片、页面排版和业务图表仍保留原实现：qfluentwidgets 不提供等价的图表控件，自绘图表能保持现有交互和数据结构。
@@ -123,10 +123,10 @@ python run.py --version
 
 ### Windows 包
 
-已构建的包位于：
+构建后的包位于：
 
 ```text
-build/FinBoardFluent-5.6.0-win64.zip
+build/FinBoardFluent-5.7.0-win64.zip
 ```
 
 解压后运行：
@@ -166,8 +166,8 @@ cd FluentRebuild
 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
 ```
 
-- 184 个测试：5.0 的 132 个业务/UI 测试 + 5 个 Fluent 壳测试 + 6 个数据可靠性 + 7 个投资流水 + 6 个负债还款 + 5 个区间报表 + 4 个交易模板 + 9 个行情 + 2 个快速记账 + 4 个安全 + 1 个应用锁 + 3 个自动化/洞察。
-- Fluent 壳测试覆盖 14 个页面、导航切换、语言切换、主题切换与日期控件；区间报表测试覆盖汇总、同比/环比、退款冲减、分类/标签/账户维度和非法日期；行情测试覆盖 A/港/美代码归一、腾讯响应解析、币种识别、缓存与错误传播。
+- 201 个测试：5.0 的 132 个业务/UI 测试 + 5 个 Fluent 壳测试 + 6 个数据可靠性 + 7 个投资流水 + 6 个负债还款 + 5 个区间报表 + 4 个交易模板 + 9 个行情 + 2 个快速记账 + 5 个安全 + 1 个应用锁 + 3 个自动化/洞察 + 16 个 5.7 功能测试。
+- Fluent 壳测试覆盖 15 个页面、导航切换、语言切换、主题切换与日期控件；区间报表测试覆盖汇总、同比/环比、退款冲减、分类/标签/账户维度和非法日期；行情测试覆盖 A/港/美代码归一、腾讯响应解析、币种识别、缓存与错误传播。
 - 另有离屏截图和 11 个对话框的构造冒烟（见 `build/`，不属于测试套件）。
 
 ## 构建
@@ -202,13 +202,13 @@ FluentRebuild/
 │  ├─ core/                  # 业务层（与 5.0 同源）
 │  ├─ ui/
 │  │  ├─ main_window.py      # FluentWindow 壳、导航、标题栏、托盘
-│  │  ├─ pages/              # 14 个页面（复用 5.0 布局）
+│  │  ├─ pages/              # 15 个页面（复用 5.0 布局）
 │  │  ├─ dialogs/            # 对话框（QDialog 壳 + Fluent 内容控件）
 │  │  ├─ charts.py           # QPainter 图表
 │  │  └─ theme.py            # 调色板 + 页面级 QSS
 │  ├─ locales/en.json
 │  └─ resources/
-├─ tests/                    # 184 个测试
+├─ tests/                    # 201 个测试
 ├─ docs/screenshots/         # README 截图（5.3 控件重写与暗色主题）
 ├─ run.py                    # 源码启动器
 ├─ FinBoardFluent.spec       # PyInstaller 定义

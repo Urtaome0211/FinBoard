@@ -147,7 +147,7 @@ class SavingsGoalRow(QFrame):
         super().__init__(parent)
         self.goal = goal
         self.setObjectName("ListRow")
-        self.setFixedHeight(94)
+        self.setFixedHeight(112)
         palette = colors()
         row = QHBoxLayout(self)
         row.setContentsMargins(4, 8, 4, 8)
@@ -193,6 +193,22 @@ class SavingsGoalRow(QFrame):
         remaining.setAlignment(Qt.AlignmentFlag.AlignRight)
         values.addWidget(amount)
         values.addWidget(remaining)
+        forecast = service.savings_goal_forecast(goal.id)
+        if not goal.completed:
+            months = forecast.get("months")
+            if months:
+                note = t(
+                    "按近 3 月结余，预计 {date} 达成",
+                    date=forecast.get("projected_date", ""),
+                )
+            elif forecast.get("monthly_rate", 0) <= 0:
+                note = t("近 3 月没有结余，暂时无法预测")
+            else:
+                note = t("按当前速度很快就能达成")
+            hint = QLabel(note)
+            hint.setProperty("role", "faint")
+            hint.setAlignment(Qt.AlignmentFlag.AlignRight)
+            values.addWidget(hint)
         row.addLayout(values)
 
         actions = QHBoxLayout()

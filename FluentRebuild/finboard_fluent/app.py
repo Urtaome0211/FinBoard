@@ -21,7 +21,15 @@ from .core.database import Database
 from .core.models import TransactionFilter
 from .core.paths import default_db_path, demo_db_path, log_path, portable_data_dir
 from .core.repository import Repository
-from .core.security import DatabaseLocked, SecurityError, is_encrypted_file, load_config, unlock_key
+from .core.security import (
+    DatabaseLocked,
+    SecurityError,
+    is_encrypted_file,
+    load_config,
+    recovery_configured,
+    unlock_key,
+    unwrap_master,
+)
 from .ui.dialogs.prompt import ask_text
 from .core.service import FinanceService
 from .i18n import is_english, set_language, t
@@ -63,7 +71,7 @@ def _unlock_password(path: Path) -> str | None:
         password, ok = ask_text(
             None,
             title=t("解锁数据库"),
-            label=t("请输入数据库密码"),
+            label=t("请输入数据库密码（或恢复密钥）"),
             password=True,
         )
         if not ok:
@@ -71,7 +79,14 @@ def _unlock_password(path: Path) -> str | None:
         try:
             return unlock_key(config, password)
         except SecurityError:
-            QMessageBox.warning(None, t("密码不正确"), t("请重新输入数据库密码。"))
+            if recovery_configured(config):
+                try:
+                    return unwrap_master(config, password)
+                except SecurityError:
+                    pass
+            QMessageBox.warning(
+                None, t("密码不正确"), t("请重新输入数据库密码或恢复密钥。")
+            )
     raise DatabaseLocked("密码错误次数过多")
 
 

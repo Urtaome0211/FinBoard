@@ -15,11 +15,15 @@ from finboard_fluent.core.backup import (
 from finboard_fluent.core.database import Database
 from finboard_fluent.core.security import (
     DatabaseLocked,
+    change_password,
     decrypt_database,
     encrypt_database,
     is_encrypted_file,
     load_config,
+    make_recovery_record,
+    recovery_configured,
     unlock_key,
+    update_config,
     verify_config,
 )
 
@@ -58,7 +62,7 @@ class SecurityTests(unittest.TestCase):
         key = unlock_key(config, "pw123456")
         db = Database(self.path, encryption_key=key)
         try:
-            self.assertEqual(db.conn.execute("PRAGMA user_version").fetchone()[0], 19)
+            self.assertEqual(db.conn.execute("PRAGMA user_version").fetchone()[0], 20)
             self.assertEqual(
                 db.conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0], 1
             )
@@ -76,6 +80,16 @@ class SecurityTests(unittest.TestCase):
             )
         finally:
             plain.close()
+
+    def test_change_password_with_recovery_code(self) -> None:
+        config = encrypt_database(self.path, "pw123456")
+        record, code = make_recovery_record(unlock_key(config, "pw123456"))
+        update_config(self.path, recovery=record)
+        self.assertTrue(recovery_configured(load_config(self.path)))
+        change_password(self.path, code, "newpw123456")
+        updated = load_config(self.path)
+        self.assertTrue(verify_config(updated, "newpw123456"))
+        self.assertFalse(verify_config(updated, code))
 
     def test_wrong_key_is_locked(self) -> None:
         config = encrypt_database(self.path, "pw123456")

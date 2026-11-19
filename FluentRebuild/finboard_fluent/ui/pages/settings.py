@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QVBoxLayout,
 )
 
@@ -29,6 +30,10 @@ from ...core.security import (
     change_password,
     is_encrypted_file,
     load_config,
+    make_recovery_record,
+    recovery_configured,
+    unlock_key,
+    unwrap_master,
     update_config,
     verify_config,
 )
@@ -66,6 +71,7 @@ class SettingsPage(Page):
         self._build_currency()
         self._build_rates()
         self._build_quotes()
+        self._build_investing()
         self._build_categories()
         self._build_security()
         self._build_data()
@@ -345,7 +351,14 @@ class SettingsPage(Page):
         self.change_button.clicked.connect(self._change_password)
         self.lock_button = ThemedButton("立即锁定", "soft", "lock")
         self.lock_button.clicked.connect(self.window.lock_now)
-        for button in (self.encryption_button, self.change_button, self.lock_button):
+        self.recovery_button = ThemedButton("生成恢复密钥", "ghost", "key")
+        self.recovery_button.clicked.connect(self._generate_recovery)
+        for button in (
+            self.encryption_button,
+            self.change_button,
+            self.lock_button,
+            self.recovery_button,
+        ):
             actions.addWidget(button)
         actions.addStretch(1)
         self.security_card.body.addLayout(actions)
@@ -399,6 +412,10 @@ class SettingsPage(Page):
             self.encryption_button.setText(t("关闭加密"))
             self.encryption_button.setProperty("variant", "danger")
             self.change_button.setVisible(True)
+            self.recovery_button.setVisible(True)
+            self.recovery_button.setText(
+                t("重新生成恢复密钥") if recovery_configured(config) else t("生成恢复密钥")
+            )
             minutes = int(config.get("auto_lock_minutes", 0))
             index = self.auto_lock_combo.findData(minutes)
             if index >= 0:
@@ -409,6 +426,7 @@ class SettingsPage(Page):
             self.security_status.setText(t("数据库未加密。启用后可防止本地文件被直接读取。"))
             self.encryption_button.setText(t("启用加密"))
             self.change_button.setVisible(False)
+            self.recovery_button.setVisible(False)
             minutes = 0
         self.auto_lock_combo.setEnabled(encrypted)
         self.lock_button.setEnabled(encrypted)
@@ -506,12 +524,22 @@ class SettingsPage(Page):
         config = load_config(self.service.repo.db.path)
         if not config or not config.get("encrypted"):
             return
-        old, ok = ask_text(self, title=t("修改密码"), label=t("当前密码"), password=True)
+        old, ok = ask_text(
+            self,
+            title=t("修改密码"),
+            label=t("当前密码（或恢复密钥）"),
+            password=True,
+        )
         if not ok:
             return
         if not verify_config(config, old):
-            ConfirmDialog.alert(self, "密码不正确", t("密码不正确。"), icon_name="alert")
-            return
+            try:
+                unwrap_master(config, old)
+            except SecurityError:
+                ConfirmDialog.alert(
+                    self, "密码不正确", t("密码或恢复密钥不正确。"), icon_name="alert"
+                )
+                return
         new, ok = ask_text(self, title=t("修改密码"), label=t("新密码（至少 6 位）"), password=True)
         if not ok or len(new) < 6:
             if ok:
@@ -532,6 +560,74 @@ class SettingsPage(Page):
             return
         ConfirmDialog.alert(self, "密码已修改", "应用将退出，请使用新密码重新打开。", icon_name="lock")
         QApplication.quit()
+
+    def _generate_recovery(self) -> None:
+        config = load_config(self.service.repo.db.path)
+        if not config or not config.get("encrypted"):
+            return
+        password, ok = ask_text(
+            self, title=t("生成恢复密钥"), label=t("输入当前数据库密码"), password=True
+        )
+        if not ok:
+            return
+        try:
+            master = unlock_key(config, password)
+        except SecurityError:
+            ConfirmDialog.alert(self, "密码不正确", t("密码不正确。"), icon_name="alert")
+            return
+        record, code = make_recovery_record(master)
+        try:
+            update_config(self.service.repo.db.path, recovery=record)
+        except (OSError, SecurityError) as exc:
+            ConfirmDialog.alert(self, "保存失败", str(exc), icon_name="alert")
+            return
+        self._update_security_labels()
+        box = QMessageBox(self)
+        box.setWindowTitle(t("恢复密钥已生成"))
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(
+            t("请抄写并妥善保存下面的恢复密钥。忘记数据库密码时，可用它解锁。")
+        )
+        box.setInformativeText(code)
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        box.exec()
+
+    def _build_investing(self) -> None:
+        card = Card(padding=20, spacing=14)
+        card.add_header("投资", "组合回报与市场基准对比")
+        row = self._row(
+            "基准年化收益率",
+            "洞察页用组合 XIRR 与此基准比较，例如沪深 300 长期年化可填 8。",
+        )
+        self.benchmark_input = LineEdit()
+        self.benchmark_input.setPlaceholderText("8.0")
+        self.benchmark_input.setFixedWidth(120)
+        current = self.service.benchmark_rate_bp()
+        self.benchmark_input.setText(f"{current / 100:g}" if current else "")
+        self.benchmark_input.editingFinished.connect(self._save_benchmark)
+        row.addWidget(self.benchmark_input)
+        card.body.addLayout(row)
+        self.body.addWidget(card)
+
+    def _save_benchmark(self) -> None:
+        text = self.benchmark_input.text().strip()
+        if not text:
+            value = 0
+        else:
+            try:
+                value = int(round(float(text) * 100))
+            except ValueError:
+                ConfirmDialog.alert(
+                    self, "格式不正确", t("请输入数字，例如 8 表示 8%。"), icon_name="alert"
+                )
+                return
+        if value < 0 or value > 100000:
+            ConfirmDialog.alert(
+                self, "数值超出范围", t("基准年化收益率应在 0 到 1000 之间。"), icon_name="alert"
+            )
+            return
+        self.service.set_benchmark_rate_bp(value)
+        self.window.notify(t("投资基准已更新"))
 
     def _create_bundle(self) -> None:
         try:

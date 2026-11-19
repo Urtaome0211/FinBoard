@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import shutil
 import sqlite3
 import tempfile
@@ -30,6 +31,9 @@ KDF_N = 2**14
 KDF_R = 8
 KDF_P = 1
 _VERIFY_LABEL = b"finboard-verify-v1"
+RECOVERY_VERSION = 1
+_RECOVERY_LABEL = b"finboard-recovery-v1"
+_RECOVERY_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _SQLITE_HEADER = b"SQLite format 3\x00"
 
 
@@ -154,6 +158,88 @@ def make_config(password: str, *, auto_lock_minutes: int = 10) -> dict[str, Any]
         "auto_lock_minutes": max(0, int(auto_lock_minutes)),
         "lock_enabled": True,
     }
+
+
+def new_recovery_code() -> str:
+    """Return a human-friendly, high-entropy recovery code."""
+    raw = "".join(secrets.choice(_RECOVERY_ALPHABET) for _ in range(20))
+    return "-".join(raw[index : index + 4] for index in range(0, 20, 4))
+
+
+def _normalize_recovery(code: str) -> str:
+    return "".join(ch for ch in str(code).upper() if ch.isalnum())
+
+
+def _recovery_key(code: str, salt: bytes) -> bytes:
+    normalized = _normalize_recovery(code)
+    if len(normalized) < 16:
+        raise SecurityError("恢复密钥格式不正确")
+    try:
+        return hashlib.scrypt(
+            normalized.encode("utf-8"), salt=salt, n=KDF_N, r=KDF_R, p=KDF_P, dklen=32
+        )
+    except (ValueError, MemoryError) as exc:  # pragma: no cover
+        raise SecurityError("无法派生恢复密钥") from exc
+
+
+def _xor_keystream(data: bytes, key: bytes) -> bytes:
+    stream = bytearray()
+    counter = 0
+    while len(stream) < len(data):
+        stream.extend(hashlib.sha256(key + counter.to_bytes(4, "big")).digest())
+        counter += 1
+    return bytes(left ^ right for left, right in zip(data, stream))
+
+
+def make_recovery_record(
+    master_hex: str, recovery_code: str | None = None
+) -> tuple[dict[str, Any], str]:
+    """Wrap the database master key with a recovery code."""
+    try:
+        master = bytes.fromhex(str(master_hex))
+    except ValueError as exc:
+        raise SecurityError("加密密钥格式不正确") from exc
+    if len(master) != 32:
+        raise SecurityError("加密密钥格式不正确")
+    code = recovery_code or new_recovery_code()
+    salt = new_salt()
+    key = _recovery_key(code, salt)
+    record = {
+        "version": RECOVERY_VERSION,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "wrapped": base64.b64encode(_xor_keystream(master, key)).decode("ascii"),
+        "check": base64.b64encode(
+            hmac.new(key, _RECOVERY_LABEL, hashlib.sha256).digest()
+        ).decode("ascii"),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    return record, code
+
+
+def recovery_configured(config: dict[str, Any] | None) -> bool:
+    record = (config or {}).get("recovery")
+    return isinstance(record, dict) and bool(record.get("wrapped"))
+
+
+def unwrap_master(config: dict[str, Any] | None, recovery_code: str) -> str:
+    """Return the master key when the recovery code matches the stored record."""
+    record = (config or {}).get("recovery")
+    if not isinstance(record, dict):
+        raise SecurityError("尚未设置恢复密钥")
+    try:
+        salt = base64.b64decode(str(record["salt"]))
+        wrapped = base64.b64decode(str(record["wrapped"]))
+        check = base64.b64decode(str(record["check"]))
+    except (KeyError, ValueError, TypeError) as exc:
+        raise SecurityError("恢复密钥记录已损坏") from exc
+    key = _recovery_key(recovery_code, salt)
+    expected = hmac.new(key, _RECOVERY_LABEL, hashlib.sha256).digest()
+    if not hmac.compare_digest(expected, check):
+        raise SecurityError("恢复密钥不正确")
+    master = _xor_keystream(wrapped, key)
+    if len(master) != 32:
+        raise SecurityError("恢复密钥记录已损坏")
+    return master.hex()
 
 
 def pragma_key(key_hex: str) -> str:
@@ -301,7 +387,10 @@ def change_password(
         raise SecurityError("当前安装缺少 SQLCipher")
     path = Path(path).expanduser()
     old_config = load_config(path)
-    old_key = unlock_key(old_config or {}, old_password)
+    try:
+        old_key = unlock_key(old_config or {}, old_password)
+    except SecurityError:
+        old_key = unwrap_master(old_config, old_password)
     new_config = make_config(new_password)
     new_key = derive_master(
         new_password, base64.b64decode(str(new_config["salt"]))

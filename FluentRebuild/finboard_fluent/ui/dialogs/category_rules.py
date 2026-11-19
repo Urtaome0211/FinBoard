@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.models import CategoryRule
+from ...core.money import parse_amount
 from ...core.service import FinanceService
 from ...i18n import t
 from ..widgets import (
@@ -48,6 +49,12 @@ class CategoryRuleRow(QFrame):
         title.setStyleSheet("font-weight: 600;")
         text.addWidget(title)
         pieces = [t("支出") if rule.kind == "expense" else t("收入")]
+        if rule.amount_min is not None or rule.amount_max is not None:
+            low = f"{rule.amount_min / 100:.2f}" if rule.amount_min is not None else "0"
+            high = f"{rule.amount_max / 100:.2f}" if rule.amount_max is not None else "∞"
+            pieces.append(t("金额 {low}–{high} 元", low=low, high=high))
+        if rule.account_name:
+            pieces.append(t("账户：{name}", name=rule.account_name))
         if rule.tags:
             pieces.append(t("标签：{tags}", tags=rule.tag_text))
         pieces.append(t("命中 {count} 次", count=rule.hit_count))
@@ -114,6 +121,22 @@ class CategoryRulesDialog(QDialog):
         self.tags_input.setPlaceholderText(t("可选标签，用逗号分隔，例如：咖啡,常去"))
         self.tags_input.setMaxLength(120)
         form_layout.addWidget(self.tags_input)
+
+        filters = QHBoxLayout()
+        filters.setSpacing(10)
+        self.amount_min_input = LineEdit()
+        self.amount_min_input.setPlaceholderText(t("最低金额（元，可选）"))
+        self.amount_max_input = LineEdit()
+        self.amount_max_input.setPlaceholderText(t("最高金额（元，可选）"))
+        self.account_combo = ComboBox()
+        self.account_combo.setProperty("i18nSkip", True)
+        self.account_combo.addItem(t("不限账户"), None)
+        for account in self.service.repo.accounts(include_archived=False):
+            self.account_combo.addItem(f"{account.name} · {account.currency}", account.id)
+        filters.addWidget(self.amount_min_input, 1)
+        filters.addWidget(self.amount_max_input, 1)
+        filters.addWidget(self.account_combo, 1)
+        form_layout.addLayout(filters)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
@@ -221,8 +244,12 @@ class CategoryRulesDialog(QDialog):
             return
         tags = self._parse_tags()
         try:
+            amount_min, amount_max, account_id = self._parse_filters()
             if self._editing_id is None:
-                self.service.add_category_rule(pattern, self.kind, category_id, tags)
+                self.service.add_category_rule(
+                    pattern, self.kind, category_id, tags,
+                    amount_min=amount_min, amount_max=amount_max, account_id=account_id,
+                )
                 self._note("规则已添加")
             else:
                 self.service.update_category_rule(
@@ -230,6 +257,9 @@ class CategoryRulesDialog(QDialog):
                     pattern=pattern,
                     category_id=category_id,
                     tags=tags,
+                    amount_min=amount_min,
+                    amount_max=amount_max,
+                    account_id=account_id,
                 )
                 self._note("规则已更新")
         except ValueError as exc:
@@ -244,6 +274,14 @@ class CategoryRulesDialog(QDialog):
         self.kind_control.setEnabled(False)
         self._load_categories(rule.category_id)
         self.tags_input.setText("、".join(rule.tags))
+        self.amount_min_input.setText(
+            f"{rule.amount_min / 100:.2f}" if rule.amount_min is not None else ""
+        )
+        self.amount_max_input.setText(
+            f"{rule.amount_max / 100:.2f}" if rule.amount_max is not None else ""
+        )
+        index = self.account_combo.findData(rule.account_id) if rule.account_id else 0
+        self.account_combo.setCurrentIndex(index if index >= 0 else 0)
         self.save_button.setText(t("保存修改"))
         self.cancel_button.show()
         self.pattern_input.setFocus()
@@ -252,6 +290,9 @@ class CategoryRulesDialog(QDialog):
         self._editing_id = None
         self.pattern_input.clear()
         self.tags_input.clear()
+        self.amount_min_input.clear()
+        self.amount_max_input.clear()
+        self.account_combo.setCurrentIndex(0)
         self.kind_control.setEnabled(True)
         self.save_button.setText(t("添加规则"))
         self.cancel_button.hide()
@@ -301,6 +342,14 @@ class CategoryRulesDialog(QDialog):
             self._note(t("已为 {changed} 笔历史记录补充标签", changed=changed))
         else:
             self._note("没有需要补充标签的历史记录")
+
+    def _parse_filters(self) -> tuple[int | None, int | None, int | None]:
+        values: list[int | None] = []
+        for field in (self.amount_min_input, self.amount_max_input):
+            raw = field.text().strip()
+            values.append(parse_amount(raw) if raw else None)
+        account_id = self.account_combo.currentData()
+        return values[0], values[1], int(account_id) if account_id else None
 
     def _note(self, text: str) -> None:
         self.status.setText(t(text))

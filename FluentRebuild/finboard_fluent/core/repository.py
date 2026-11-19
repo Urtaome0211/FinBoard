@@ -38,6 +38,7 @@ from .models import (
     Attachment,
     BudgetLine,
     Category,
+    AppNotification,
     CategoryRule,
     CategorySpend,
     CsvRule,
@@ -129,7 +130,7 @@ SELECT r.id, r.name, r.kind, r.amount, r.currency, r.account_id,
        a.name AS account_name, r.category_id, c.name AS category_name,
        r.to_account_id, ta.name AS to_account_name, r.payee, r.note,
        r.fee_waived, r.frequency, r.interval_count, r.start_date, r.end_date,
-       r.next_date, r.active, r.created_at
+       r.next_date, r.active, r.auto_post, r.created_at
 FROM recurring_transactions r
 JOIN accounts a ON a.id = r.account_id
 LEFT JOIN accounts ta ON ta.id = r.to_account_id
@@ -263,6 +264,7 @@ class Repository:
             end_date=row["end_date"],
             next_date=row["next_date"],
             active=bool(row["active"]),
+            auto_post=bool(row["auto_post"]),
             currency=row["currency"] or "CNY",
             created_at=row["created_at"] or "",
         )
@@ -1196,6 +1198,7 @@ class Repository:
         start_date: str | None = None,
         end_date: str | None = None,
         active: bool = True,
+        auto_post: bool = False,
         currency: str = "CNY",
     ) -> int:
         start = normalize_day(start_date) if start_date else today_iso()
@@ -1216,8 +1219,8 @@ class Repository:
             "INSERT INTO recurring_transactions"
             " (name, kind, amount, currency, account_id, category_id, to_account_id,"
             "  payee, note, fee_waived, frequency, interval_count, start_date, end_date,"
-            "  next_date, active, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  next_date, active, auto_post, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 name,
                 kind,
@@ -1235,6 +1238,7 @@ class Repository:
                 end,
                 start,
                 int(bool(active)),
+                int(bool(auto_post)),
                 now_iso(),
             ),
         )
@@ -1259,6 +1263,7 @@ class Repository:
         start_date: str,
         end_date: str | None = None,
         active: bool = True,
+        auto_post: bool = False,
         currency: str = "CNY",
     ) -> None:
         current = self.get_recurring(recurring_id)
@@ -1282,7 +1287,8 @@ class Repository:
             "UPDATE recurring_transactions SET name = ?, kind = ?, amount = ?,"
             " currency = ?, account_id = ?, category_id = ?, to_account_id = ?,"
             " payee = ?, note = ?, fee_waived = ?, frequency = ?, interval_count = ?,"
-            " start_date = ?, end_date = ?, next_date = ?, active = ?, updated_at = ?"
+            " start_date = ?, end_date = ?, next_date = ?, active = ?, auto_post = ?,"
+            " updated_at = ?"
             " WHERE id = ?",
             (
                 name,
@@ -1301,6 +1307,7 @@ class Repository:
                 end,
                 next_date,
                 int(bool(active)),
+                int(bool(auto_post)),
                 now_iso(),
                 recurring_id,
             ),
@@ -1353,6 +1360,26 @@ class Repository:
         )
         self.conn.commit()
         return transaction_id
+
+    def auto_post_recurring(self, day: str | None = None) -> int:
+        """Post every due rule that opted into automatic posting."""
+        day = normalize_day(day) if day else today_iso()
+        posted = 0
+        for rule in self.due_recurring(day):
+            if not rule.auto_post:
+                continue
+            for _ in range(240):
+                current = self.get_recurring(rule.id)
+                if not current.active or not current.auto_post:
+                    break
+                if current.next_date > day:
+                    break
+                try:
+                    self.post_recurring(current.id)
+                except ValueError:
+                    break
+                posted += 1
+        return posted
 
     # ---------------------------------------------------------- reconciliation
     def reconciliations(
@@ -1929,6 +1956,203 @@ class Repository:
             (str(key), str(value)),
         )
         self.conn.commit()
+
+    def add_notification(
+        self,
+        dedupe_key: str,
+        kind: str,
+        title: str,
+        body: str = "",
+        link: str = "",
+    ) -> bool:
+        key = str(dedupe_key or "").strip()[:120]
+        if not key:
+            return False
+        cursor = self.conn.execute(
+            "INSERT OR IGNORE INTO app_notifications"
+            " (dedupe_key, kind, title, body, link, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                key,
+                str(kind or "info")[:20],
+                str(title or "")[:120],
+                str(body or "")[:400],
+                str(link or "")[:40],
+                now_iso(),
+            ),
+        )
+        self.conn.commit()
+        return bool(cursor.rowcount)
+
+    @staticmethod
+    def _notification(row: sqlite3.Row) -> AppNotification:
+        return AppNotification(
+            id=int(row["id"]),
+            kind=str(row["kind"] or "info"),
+            title=str(row["title"] or ""),
+            body=str(row["body"] or ""),
+            link=str(row["link"] or ""),
+            created_at=str(row["created_at"] or ""),
+            read=row["read_at"] is not None,
+        )
+
+    def notifications(self, *, limit: int = 50) -> list[AppNotification]:
+        rows = self.conn.execute(
+            "SELECT * FROM app_notifications"
+            " ORDER BY (read_at IS NOT NULL), created_at DESC, id DESC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+        return [self._notification(row) for row in rows]
+
+    def unread_notification_count(self) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM app_notifications WHERE read_at IS NULL"
+        ).fetchone()
+        return int(row[0])
+
+    def mark_notification_read(self, notification_id: int) -> None:
+        self.conn.execute(
+            "UPDATE app_notifications SET read_at = ? WHERE id = ? AND read_at IS NULL",
+            (now_iso(), int(notification_id)),
+        )
+        self.conn.commit()
+
+    def mark_all_notifications_read(self) -> None:
+        self.conn.execute(
+            "UPDATE app_notifications SET read_at = ? WHERE read_at IS NULL",
+            (now_iso(),),
+        )
+        self.conn.commit()
+
+    def clear_read_notifications(self) -> None:
+        self.conn.execute("DELETE FROM app_notifications WHERE read_at IS NOT NULL")
+        self.conn.commit()
+
+    def copy_budgets(self, from_month: str, to_month: str) -> int:
+        """Copy missing budget lines from one month into another."""
+        parse_month(from_month)
+        parse_month(to_month)
+        rows = self.conn.execute(
+            "SELECT category_id, amount, rollover FROM budgets WHERE month = ?",
+            (from_month,),
+        ).fetchall()
+        copied = 0
+        for row in rows:
+            cursor = self.conn.execute(
+                "INSERT OR IGNORE INTO budgets (month, category_id, amount, rollover)"
+                " VALUES (?, ?, ?, ?)",
+                (to_month, row["category_id"], row["amount"], row["rollover"]),
+            )
+            copied += int(cursor.rowcount)
+        self.conn.commit()
+        return copied
+
+    def average_monthly_surplus(self, months: int = 3) -> int:
+        """Average income minus expense over the trailing whole months."""
+        months = max(1, min(12, int(months)))
+        start_month = shift_month(month_of(today_iso()), -(months - 1))
+        start = month_bounds(start_month)[0]
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN kind = 'income' THEN amount"
+            "                             ELSE -amount END), 0) AS total"
+            " FROM transactions"
+            " WHERE date >= ? AND date <= ? AND kind IN ('expense','income')"
+            "   AND refund_of_id IS NULL",
+            (start, today_iso()),
+        ).fetchone()
+        return int(row["total"]) // months
+
+    def savings_goal_forecast(self, goal_id: int) -> dict[str, object]:
+        goal = self.get_savings_goal(goal_id)
+        remaining = max(0, goal.target_amount - goal.saved_amount)
+        rate = self.average_monthly_surplus(3)
+        months: int | None = None
+        projected = ""
+        if remaining == 0:
+            months = 0
+            projected = today_iso()
+        elif rate > 0:
+            months = -(-remaining // rate)
+            projected = add_months(today_iso(), months)
+        on_track = True
+        if goal.target_date and projected:
+            on_track = projected <= goal.target_date
+        elif goal.target_date and not projected:
+            on_track = False
+        return {
+            "remaining": remaining,
+            "monthly_rate": rate,
+            "months": months,
+            "projected_date": projected,
+            "on_track": on_track,
+        }
+
+    def data_health(self) -> list[dict[str, object]]:
+        def count(sql: str, params: tuple[object, ...] = ()) -> int:
+            return int(self.conn.execute(sql, params).fetchone()[0])
+
+        month = month_of(today_iso())
+        over_budget = 0
+        for line in self.budget_lines(month):
+            budget = line.amount + line.rollover
+            if budget > 0 and line.spent > budget:
+                over_budget += 1
+        return [
+            {
+                "key": "uncategorized",
+                "label": "未分类收支",
+                "count": count(
+                    "SELECT COUNT(*) FROM transactions WHERE kind IN ('expense','income')"
+                    " AND category_id IS NULL AND refund_of_id IS NULL"
+                ),
+                "level": "warn",
+                "link": "transactions",
+                "hint": "补分类后报表和预算才准确",
+            },
+            {
+                "key": "duplicates",
+                "label": "疑似重复交易",
+                "count": count(
+                    "SELECT COUNT(*) FROM (SELECT date, amount, account_id,"
+                    " lower(payee) FROM transactions WHERE refund_of_id IS NULL"
+                    " GROUP BY date, amount, account_id, lower(payee)"
+                    " HAVING COUNT(*) > 1)"
+                ),
+                "level": "warn",
+                "link": "transactions",
+                "hint": "同一天、同账户、同金额、同对方",
+            },
+            {
+                "key": "overdue_receivables",
+                "label": "逾期应收应付",
+                "count": count(
+                    "SELECT COUNT(*) FROM receivables WHERE status = 'open'"
+                    " AND due_date IS NOT NULL AND due_date < ?",
+                    (today_iso(),),
+                ),
+                "level": "warn",
+                "link": "receivables",
+                "hint": "已过到期日仍未结清",
+            },
+            {
+                "key": "stale_prices",
+                "label": "长期未更新价格的投资",
+                "count": count(
+                    "SELECT COUNT(*) FROM holdings WHERE price = 0"
+                ),
+                "level": "info",
+                "link": "accounts",
+                "hint": "现价为 0，净值会被低估",
+            },
+            {
+                "key": "over_budget",
+                "label": "本月超支的预算",
+                "count": over_budget,
+                "level": "warn",
+                "link": "budgets",
+                "hint": "含结转额度后仍然超支",
+            },
+        ]
 
     def holdings_summary(self, account_id: int | None = None) -> HoldingsSummary:
         rows = self.holdings(account_id)
@@ -5040,6 +5264,10 @@ class Repository:
             category_id=int(row["category_id"]),
             category_name=str(row["category_name"] or ""),
             category_color=str(row["category_color"] or ""),
+            account_name=str(row["account_name"] or ""),
+            amount_min=(int(row["amount_min"]) if row["amount_min"] is not None else None),
+            amount_max=(int(row["amount_max"]) if row["amount_max"] is not None else None),
+            account_id=(int(row["account_id"]) if row["account_id"] is not None else None),
             tags=tags,
             hit_count=int(row["hit_count"] or 0),
             created_at=str(row["created_at"] or ""),
@@ -5047,16 +5275,20 @@ class Repository:
 
     def category_rules(self) -> list[CategoryRule]:
         rows = self.conn.execute(
-            "SELECT r.*, c.name AS category_name, c.color AS category_color"
+            "SELECT r.*, c.name AS category_name, c.color AS category_color,"
+            "       a.name AS account_name"
             " FROM category_rules r JOIN categories c ON c.id = r.category_id"
+            " LEFT JOIN accounts a ON a.id = r.account_id"
             " ORDER BY r.kind, lower(r.pattern)"
         ).fetchall()
         return [self._category_rule(row) for row in rows]
 
     def get_category_rule(self, rule_id: int) -> CategoryRule:
         row = self.conn.execute(
-            "SELECT r.*, c.name AS category_name, c.color AS category_color"
+            "SELECT r.*, c.name AS category_name, c.color AS category_color,"
+            "       a.name AS account_name"
             " FROM category_rules r JOIN categories c ON c.id = r.category_id"
+            " LEFT JOIN accounts a ON a.id = r.account_id"
             " WHERE r.id = ?",
             (int(rule_id),),
         ).fetchone()
@@ -5064,12 +5296,34 @@ class Repository:
             raise ValueError("分类规则不存在")
         return self._category_rule(row)
 
+    @staticmethod
+    def _clean_rule_filters(
+        amount_min: int | None, amount_max: int | None, account_id: int | None
+    ) -> tuple[int | None, int | None, int | None]:
+        if amount_min is not None:
+            amount_min = int(amount_min)
+            if amount_min < 0:
+                raise ValueError("金额下限无效")
+        if amount_max is not None:
+            amount_max = int(amount_max)
+            if amount_max < 0:
+                raise ValueError("金额上限无效")
+        if amount_min is not None and amount_max is not None and amount_min > amount_max:
+            raise ValueError("金额下限不能高于上限")
+        if account_id is not None:
+            account_id = int(account_id)
+        return amount_min, amount_max, account_id
+
     def add_category_rule(
         self,
         pattern: str,
         kind: str,
         category_id: int,
         tags: Iterable[str] | None = None,
+        *,
+        amount_min: int | None = None,
+        amount_max: int | None = None,
+        account_id: int | None = None,
     ) -> int:
         pattern = str(pattern or "").strip()[:40]
         if not pattern:
@@ -5080,16 +5334,25 @@ class Repository:
         if category.kind != kind:
             raise ValueError("分类与规则类型不匹配")
         tag_names = self._normalize_tags(tags or [])
+        amount_min, amount_max, account_id = self._clean_rule_filters(
+            amount_min, amount_max, account_id
+        )
+        if account_id is not None:
+            self.get_account(account_id)
         try:
             cursor = self.conn.execute(
                 "INSERT INTO category_rules"
-                " (pattern, kind, category_id, tags, created_at)"
-                " VALUES (?, ?, ?, ?, ?)",
+                " (pattern, kind, category_id, tags, amount_min, amount_max,"
+                "  account_id, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     pattern,
                     kind,
                     int(category_id),
                     json.dumps(tag_names, ensure_ascii=False),
+                    amount_min,
+                    amount_max,
+                    account_id,
                     now_iso(),
                 ),
             )
@@ -5105,6 +5368,9 @@ class Repository:
         pattern: str | None = None,
         category_id: int | None = None,
         tags: Iterable[str] | None = None,
+        amount_min: int | None = None,
+        amount_max: int | None = None,
+        account_id: int | None = None,
     ) -> None:
         rule = self.get_category_rule(rule_id)
         pattern = (
@@ -5119,14 +5385,23 @@ class Repository:
         tag_names = (
             self._normalize_tags(tags) if tags is not None else list(rule.tags)
         )
+        amount_min, amount_max, account_id = self._clean_rule_filters(
+            amount_min, amount_max, account_id
+        )
+        if account_id is not None:
+            self.get_account(account_id)
         try:
             self.conn.execute(
                 "UPDATE category_rules SET pattern = ?, category_id = ?, tags = ?,"
-                " updated_at = ? WHERE id = ?",
+                " amount_min = ?, amount_max = ?, account_id = ?, updated_at = ?"
+                " WHERE id = ?",
                 (
                     pattern,
                     target,
                     json.dumps(tag_names, ensure_ascii=False),
+                    amount_min,
+                    amount_max,
+                    account_id,
                     now_iso(),
                     int(rule_id),
                 ),
@@ -5141,15 +5416,28 @@ class Repository:
         )
         self.conn.commit()
 
-    def match_category_rule(self, payee: str, kind: str) -> CategoryRule | None:
+    def match_category_rule(
+        self,
+        payee: str,
+        kind: str,
+        *,
+        amount: int | None = None,
+        account_id: int | None = None,
+    ) -> CategoryRule | None:
         text = str(payee or "").strip().casefold()
         if not text:
             return None
-        matches = [
-            rule
-            for rule in self.category_rules()
-            if rule.kind == kind and rule.pattern.casefold() in text
-        ]
+        matches: list[CategoryRule] = []
+        for rule in self.category_rules():
+            if rule.kind != kind or rule.pattern.casefold() not in text:
+                continue
+            if rule.account_id is not None and rule.account_id != account_id:
+                continue
+            if rule.amount_min is not None and (amount is None or int(amount) < rule.amount_min):
+                continue
+            if rule.amount_max is not None and (amount is None or int(amount) > rule.amount_max):
+                continue
+            matches.append(rule)
         if not matches:
             return None
         return max(matches, key=lambda rule: (len(rule.pattern), -rule.id))

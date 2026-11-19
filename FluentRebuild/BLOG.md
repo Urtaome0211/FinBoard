@@ -631,4 +631,4 @@ sqlite3.IntegrityError: CHECK constraint failed: quantity_units > 0
 
 ---
 
-*本文对应的代码在 `FluentRebuild/`；5.6.0 为本地版本，尚未发布到 GitHub。*
+*本文对应的代码在 `FluentRebuild/`；5.7.0 为本地版本，尚未发布到 GitHub。*

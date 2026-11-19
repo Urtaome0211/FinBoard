@@ -24,7 +24,7 @@ class TransactionTemplateTests(unittest.TestCase):
 
     def test_schema_and_crud(self) -> None:
         version = self.db.conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 19)
+        self.assertEqual(version, 20)
         template_id = self.repo.add_transaction_template(
             "午餐",
             kind="expense",

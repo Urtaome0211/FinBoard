@@ -54,7 +54,7 @@ def month_of(value: str | date) -> str:
     """Return ``YYYY-MM`` for an ISO date or a date object."""
     if isinstance(value, date):
         return f"{value.year:04d}-{value.month:02d}"
-    return parse_iso_day(value)[:7]
+    return parse_iso_day(value).isoformat()[:7]
 
 
 def parse_month(month: str) -> tuple[int, int]:

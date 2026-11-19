@@ -24,7 +24,7 @@ class InvestmentLotTests(unittest.TestCase):
 
     def test_schema_has_investment_tables(self) -> None:
         version = self.db.conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 19)
+        self.assertEqual(version, 20)
         tables = {
             row[0]
             for row in self.db.conn.execute(
@@ -172,6 +172,11 @@ class InvestmentLotTests(unittest.TestCase):
         conn.execute("DROP TABLE investment_disposals")
         conn.execute("DROP TABLE investment_lots")
         conn.execute("DROP TABLE investment_trades")
+        conn.execute("ALTER TABLE recurring_transactions DROP COLUMN auto_post")
+        conn.execute("ALTER TABLE category_rules DROP COLUMN amount_min")
+        conn.execute("ALTER TABLE category_rules DROP COLUMN amount_max")
+        conn.execute("ALTER TABLE category_rules DROP COLUMN account_id")
+        conn.execute("DROP TABLE app_notifications")
         conn.execute("PRAGMA user_version = 15")
         conn.commit()
         conn.close()
@@ -179,7 +184,7 @@ class InvestmentLotTests(unittest.TestCase):
         repo = Repository(db)
         trades = repo.investment_trades(account_id)
         lots = repo.investment_lots(account_id)
-        self.assertEqual(repo.db.conn.execute("PRAGMA user_version").fetchone()[0], 19)
+        self.assertEqual(repo.db.conn.execute("PRAGMA user_version").fetchone()[0], 20)
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0].kind, "buy")
         self.assertEqual(trades[0].quantity_units, 2_000_000)

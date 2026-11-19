@@ -133,6 +133,7 @@ class RecurringDialog(QDialog):
         self.waive_check = CheckBox(t("本次提现豁免手续费"))
         self.active_check = CheckBox(t("启用此规则"))
         self.active_check.setChecked(True)
+        self.auto_check = CheckBox(t("到期自动入账（无需手动确认）"))
 
         form = QFormLayout()
         form.setHorizontalSpacing(18)
@@ -156,6 +157,7 @@ class RecurringDialog(QDialog):
         options.setSpacing(4)
         options.addWidget(self.waive_check)
         options.addWidget(self.active_check)
+        options.addWidget(self.auto_check)
         layout.addLayout(options)
 
         self.hint = QLabel(t("到期后会在「定期」页面提示，确认入账才会写入收支。"))
@@ -278,6 +280,7 @@ class RecurringDialog(QDialog):
         self.note_input.setText(rule.note)
         self.waive_check.setChecked(rule.fee_waived)
         self.active_check.setChecked(rule.active)
+        self.auto_check.setChecked(bool(rule.auto_post))
         self._sync_currency()
 
     # ------------------------------------------------------------------
@@ -325,6 +328,7 @@ class RecurringDialog(QDialog):
             start_date=self.start_edit.getDate().toString("yyyy-MM-dd"),
             end_date=end_date,
             active=self.active_check.isChecked(),
+            auto_post=self.auto_check.isChecked(),
             currency=self.currency_combo.currentData(),
         )
         try:

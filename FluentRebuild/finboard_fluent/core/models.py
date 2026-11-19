@@ -547,6 +547,7 @@ class RecurringTransaction:
     end_date: str | None = None
     next_date: str = ""
     active: bool = True
+    auto_post: bool = False
     currency: str = "CNY"
     created_at: str = ""
 
@@ -938,12 +939,29 @@ class CategoryRule:
     category_name: str = ""
     category_color: str = ""
     tags: tuple[str, ...] = ()
+    amount_min: int | None = None
+    amount_max: int | None = None
+    account_id: int | None = None
+    account_name: str = ""
     hit_count: int = 0
     created_at: str = ""
 
     @property
     def tag_text(self) -> str:
         return "、".join(self.tags)
+
+
+@dataclass(frozen=True)
+class AppNotification:
+    """An in-app notice shown in the title-bar notification center."""
+
+    id: int
+    kind: str
+    title: str
+    body: str = ""
+    link: str = ""
+    created_at: str = ""
+    read: bool = False
 
 
 @dataclass

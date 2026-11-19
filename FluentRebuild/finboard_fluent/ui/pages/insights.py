@@ -101,6 +101,17 @@ class InsightsPage(Page):
         self.category_bars.setMinimumHeight(220)
         self.category_card.body.addWidget(self.category_bars)
         self.body.addWidget(self.category_card)
+
+        self.benchmark_card = Card(padding=20, spacing=8)
+        self.benchmark_card.add_header("投资回报基准", "组合年化收益（XIRR）与设定基准对比")
+        self.benchmark_value = QLabel("—")
+        self.benchmark_value.setStyleSheet("font-size: 26px; font-weight: 600;")
+        self.benchmark_card.body.addWidget(self.benchmark_value)
+        self.benchmark_hint = QLabel("")
+        self.benchmark_hint.setProperty("role", "muted")
+        self.benchmark_hint.setWordWrap(True)
+        self.benchmark_card.body.addWidget(self.benchmark_hint)
+        self.body.addWidget(self.benchmark_card)
         self.body.addStretch(1)
 
     def refresh(self) -> None:
@@ -171,6 +182,39 @@ class InsightsPage(Page):
         breakdown = self.service.repo.category_breakdown(month, "expense")
         self.category_bars.set_data(
             breakdown[:6], total=sum(item.amount for item in breakdown)
+        )
+        self._refresh_benchmark()
+
+    def _refresh_benchmark(self) -> None:
+        rate = self.service.portfolio_xirr()
+        benchmark_bp = self.service.benchmark_rate_bp()
+        if rate is None:
+            self.benchmark_value.setText("—")
+            self.benchmark_value.setStyleSheet("font-size: 26px; font-weight: 600;")
+            self.benchmark_hint.setText(
+                t("还没有足够的投资现金流，记录买入与当前市值后即可计算。")
+            )
+            return
+        percent = rate * 100
+        palette = colors()
+        beat = not benchmark_bp or percent * 100 >= benchmark_bp
+        color = palette.income if beat else palette.warning
+        self.benchmark_value.setStyleSheet(
+            f"font-size: 26px; font-weight: 600; color: {color};"
+        )
+        self.benchmark_value.setText(f"{percent:.2f}%")
+        if not benchmark_bp:
+            self.benchmark_hint.setText(
+                t("尚未设置基准年化收益率，可在设置中填写。")
+            )
+            return
+        gap = percent - benchmark_bp / 100
+        if gap >= 0:
+            status = t("跑赢基准 {gap:.2f} 个百分点", gap=gap)
+        else:
+            status = t("落后基准 {gap:.2f} 个百分点", gap=abs(gap))
+        self.benchmark_hint.setText(
+            f"{t('设定基准')} {benchmark_bp / 100:.2f}% · {status}"
         )
 
     def _refresh_changes(self, current, previous, net_now, net_before, money) -> None:

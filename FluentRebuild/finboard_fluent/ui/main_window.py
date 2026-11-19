@@ -30,7 +30,13 @@ from qfluentwidgets import (
 from ..core.dates import month_of, today
 from ..core.models import Account, Transaction
 from ..core.rates import RateSnapshot, RateStore
-from ..core.security import load_config, verify_config
+from ..core.security import (
+    SecurityError,
+    load_config,
+    recovery_configured,
+    unwrap_master,
+    verify_config,
+)
 from ..i18n import is_english, language, set_language as set_ui_language, t
 from .dialogs import AccountDialog, QuickEntryDialog, TransactionDialog
 from .hotkeys import GlobalHotkey
@@ -44,6 +50,7 @@ from .pages import (
     DebtsPage,
     FixedAssetsPage,
     ForecastPage,
+    HealthPage,
     InsightsPage,
     PlannedPage,
     ReceivablesPage,
@@ -61,6 +68,7 @@ if TYPE_CHECKING:
 NAV_ITEMS = [
     ("dashboard", "总览"),
     ("insights", "洞察"),
+    ("health", "数据体检"),
     ("transactions", "收支明细"),
     ("accounts", "账户"),
     ("debts", "负债"),
@@ -77,6 +85,7 @@ NAV_ITEMS = [
 NAV_ICONS = {
     "dashboard": FluentIcon.HOME,
     "insights": FluentIcon.HEART,
+    "health": FluentIcon.CHECKBOX,
     "transactions": FluentIcon.DOCUMENT,
     "accounts": FluentIcon.FOLDER,
     "debts": FluentIcon.CERTIFICATE,
@@ -150,6 +159,7 @@ class MainWindow(FluentWindow):
         self._hotkey: GlobalHotkey | None = None
         self._hotkey_registered = False
         self._lock_overlay: UnlockOverlay | None = None
+        self._bell_menu: QMenu | None = None
         self._lock_timer = QTimer(self)
         self._lock_timer.setInterval(30_000)
         self._lock_timer.timeout.connect(self._check_auto_lock)
@@ -177,6 +187,7 @@ class MainWindow(FluentWindow):
         self.pages: dict[str, QWidget] = {
             "dashboard": DashboardPage(self.service, self),
             "insights": InsightsPage(self.service, self),
+            "health": HealthPage(self.service, self),
             "transactions": TransactionsPage(self.service, self),
             "accounts": AccountsPage(self.service, self),
             "debts": DebtsPage(self.service, self),
@@ -205,7 +216,8 @@ class MainWindow(FluentWindow):
         self.service.changed.connect(self._on_data_changed)
         theme_store.changed.connect(self._on_theme_changed)
         self._update_theme_button()
-        self.navigate("dashboard")
+        self.navigate(str(self.settings.value("nav/last", "dashboard")))
+        QTimer.singleShot(900, self._run_startup_automation)
         QTimer.singleShot(1200, self._auto_refresh_rates)
         QTimer.singleShot(1200, self._check_reminders)
         QTimer.singleShot(2200, self._auto_refresh_quotes)
@@ -255,17 +267,28 @@ class MainWindow(FluentWindow):
     def _try_unlock(self, password: str) -> None:
         config = load_config(self.service.repo.db.path)
         if verify_config(config, password):
-            overlay = self._lock_overlay
-            self._lock_overlay = None
-            if overlay is not None:
-                overlay.hide()
-                overlay.deleteLater()
-            self.titleBar.show()
-            self.navigationInterface.show()
-            self._last_activity = time.monotonic()
+            self._finish_unlock()
             return
+        if recovery_configured(config):
+            try:
+                unwrap_master(config, password)
+            except SecurityError:
+                pass
+            else:
+                self._finish_unlock()
+                return
         if self._lock_overlay is not None:
-            self._lock_overlay.show_error(t("密码不正确"))
+            self._lock_overlay.show_error(t("密码或恢复密钥不正确"))
+
+    def _finish_unlock(self) -> None:
+        overlay = self._lock_overlay
+        self._lock_overlay = None
+        if overlay is not None:
+            overlay.hide()
+            overlay.deleteLater()
+        self.titleBar.show()
+        self.navigationInterface.show()
+        self._last_activity = time.monotonic()
 
     def eventFilter(self, obj, event):  # noqa: N802
         if event.type() in (
@@ -341,6 +364,12 @@ class MainWindow(FluentWindow):
         bar.insertWidget(5, self.currency_chip)
         bar.insertWidget(6, self.theme_button)
 
+        self.notification_button = TransparentToolButton(FluentIcon.RINGER, self)
+        self.notification_button.setFixedSize(32, 32)
+        self.notification_button.setToolTip(t("通知"))
+        self.notification_button.clicked.connect(self.open_notifications)
+        bar.insertWidget(7, self.notification_button)
+
     def _setup_hotkeys(self) -> None:
         self._hotkey = GlobalHotkey(QApplication.instance(), parent=self)
         self._hotkey.activated.connect(
@@ -385,6 +414,11 @@ class MainWindow(FluentWindow):
         page = self.pages.get(key)
         if page is None:
             return
+        previous = self.pages.get(self.current_key)
+        if previous is not None and previous is not page and hasattr(previous, "remember_view"):
+            previous.remember_view()
+        if hasattr(page, "restore_view"):
+            page.restore_view()
         self.current_key = key
         self.navigationInterface.setCurrentItem(page.objectName())
         self.switchTo(page)
@@ -401,10 +435,12 @@ class MainWindow(FluentWindow):
             if hasattr(page, "refresh"):
                 page.refresh()
         self._update_currency_chip()
+        self._refresh_notifications()
         localize_widgets(self)
 
     def _on_data_changed(self) -> None:
         self.refresh_all()
+        self._refresh_notifications()
 
     def _update_currency_chip(self) -> None:
         if hasattr(self, "currency_chip"):
@@ -781,6 +817,66 @@ class MainWindow(FluentWindow):
             self.navigate("transactions")
         page.search_everything(text)
 
+    # ------------------------------------------------------------------ notifications
+    def _refresh_notifications(self) -> None:
+        button = getattr(self, "notification_button", None)
+        if button is None:
+            return
+        unread = self.service.unread_notifications()
+        button.setToolTip(
+            t("通知 · {count} 条未读", count=unread) if unread else t("通知")
+        )
+
+    def _run_startup_automation(self) -> None:
+        try:
+            posted = self.service.auto_post_recurring()
+            self.service.refresh_alerts()
+        except (ValueError, RuntimeError):
+            return
+        self._refresh_notifications()
+        if posted:
+            self.notify(t("已自动入账 {count} 笔定期交易", count=posted))
+
+    def open_notifications(self) -> None:
+        menu = QMenu(self)
+        items = self.service.notifications(20)
+        if not items:
+            action = menu.addAction(t("暂无通知"))
+            action.setEnabled(False)
+        for item in items:
+            action = menu.addAction(("● " if not item.read else "") + item.title)
+            if item.body:
+                action.setToolTip(item.body)
+            action.triggered.connect(
+                lambda _checked=False, notification=item: self._open_notification(notification)
+            )
+        menu.addSeparator()
+        mark = menu.addAction(t("全部标为已读"))
+        mark.triggered.connect(self._mark_notifications_read)
+        clear = menu.addAction(t("清除已读通知"))
+        clear.triggered.connect(self._clear_notifications)
+        self._bell_menu = menu
+        menu.exec(
+            self.notification_button.mapToGlobal(
+                self.notification_button.rect().bottomLeft()
+            )
+        )
+        self._bell_menu = None
+
+    def _open_notification(self, notification) -> None:
+        self.service.mark_notification_read(notification.id)
+        if notification.link in self.pages:
+            self.navigate(notification.link)
+        self._refresh_notifications()
+
+    def _mark_notifications_read(self) -> None:
+        self.service.mark_all_notifications_read()
+        self._refresh_notifications()
+
+    def _clear_notifications(self) -> None:
+        self.service.clear_notifications()
+        self._refresh_notifications()
+
     # ------------------------------------------------------------------ window
     def _restore_geometry(self) -> None:
         raw = self.settings.value("geometry")
@@ -795,6 +891,7 @@ class MainWindow(FluentWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("nav/last", self.current_key)
         if (
             not self._quitting
             and self._tray is not None
