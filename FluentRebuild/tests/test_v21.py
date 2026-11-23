@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from finboard_fluent.core.database import Database
+from finboard_fluent.core.dates import today_iso
 from finboard_fluent.core.repository import Repository
 from finboard_fluent.core.service import FinanceService
 
@@ -137,6 +138,100 @@ class V21CoreTests(unittest.TestCase):
         valuation = self.repo.valuations(account)[0]
         self.assertEqual(valuation.value, 4_600_000)
         self.assertEqual(self.repo.get_account(account).balance, 5_000_000)
+
+    def test_v21_backfills_valuation_cash(self) -> None:
+        path = Path(self.tmp.name) / "test.db"
+        account = self.repo.add_account("证券账户", "investment", 0)
+        holding = self.repo.add_holding(
+            account,
+            "ETF",
+            quantity_units=1_000_000,
+            cost_price=100_000,
+            price=100_000,
+        )
+        category = self.repo.add_category("测试收入", "income")
+        self.repo.add_transaction(
+            date="2026-01-02",
+            kind="income",
+            amount=50_000,
+            account_id=account,
+            category_id=category,
+        )
+        self.service.set_valuation(account, "2026-01-01", 500_000)
+        self.assertEqual(self.repo.get_account(account).cash_balance, 450_000)
+
+        self.db.conn.execute("ALTER TABLE account_valuations DROP COLUMN cash")
+        self.db.conn.execute("PRAGMA user_version = 20")
+        self.db.conn.commit()
+        self.db.close()
+
+        self.db = Database(path)
+        self.repo = Repository(self.db)
+        self.assertEqual(
+            self.db.conn.execute("PRAGMA user_version").fetchone()[0], 21
+        )
+        current = self.repo.get_account(account)
+        self.assertEqual(current.last_valuation_cash, 400_000)
+        self.assertEqual(current.cash_balance, 450_000)
+        self.repo.update_holding_price(holding, 200_000)
+        current = self.repo.get_account(account)
+        self.assertEqual(current.cash_balance, 450_000)
+        self.assertEqual(current.balance, 650_000)
+
+    def test_v21_reopen_after_downgrade_keeps_cash(self) -> None:
+        path = Path(self.tmp.name) / "test.db"
+        account = self.repo.add_account("证券账户", "investment", 0)
+        holding = self.repo.add_holding(
+            account,
+            "ETF",
+            quantity_units=1_000_000,
+            cost_price=100_000,
+            price=100_000,
+        )
+        self.service.set_valuation(account, "2026-01-01", 500_000)
+        self.assertEqual(self.repo.get_account(account).cash_balance, 400_000)
+
+        self.db.conn.execute("PRAGMA user_version = 20")
+        self.db.conn.commit()
+        self.db.close()
+
+        self.db = Database(path)
+        self.repo = Repository(self.db)
+        self.assertEqual(
+            self.db.conn.execute("PRAGMA user_version").fetchone()[0], 21
+        )
+        current = self.repo.get_account(account)
+        self.assertEqual(current.last_valuation_cash, 400_000)
+        self.assertEqual(current.cash_balance, 400_000)
+        self.repo.update_holding_price(holding, 200_000)
+        current = self.repo.get_account(account)
+        self.assertEqual(current.cash_balance, 400_000)
+        self.assertEqual(current.balance, 600_000)
+
+    def test_investment_cash_is_frozen_at_valuation(self) -> None:
+        account = self.repo.add_account("证券账户", "investment", 0)
+        holding = self.repo.add_holding(
+            account,
+            "ETF",
+            quantity_units=1_000_000,
+            cost_price=100_000,
+            price=100_000,
+        )
+        self.service.set_valuation(account, today_iso(), 500_000)
+        current = self.repo.get_account(account)
+        self.assertEqual(current.cash_balance, 400_000)
+        self.assertEqual(current.balance, 500_000)
+
+        self.repo.update_holding_price(holding, 200_000)
+        current = self.repo.get_account(account)
+        self.assertEqual(current.holdings_value, 200_000)
+        self.assertEqual(current.cash_balance, 400_000)
+        self.assertEqual(current.balance, 600_000)
+
+        self.service.set_cash_balance(account, 450_000)
+        current = self.repo.get_account(account)
+        self.assertEqual(current.cash_balance, 450_000)
+        self.assertEqual(current.balance, 650_000)
 
     def test_investment_cash_rejects_negative(self) -> None:
         account = self.repo.add_account("证券账户", "investment", 0)

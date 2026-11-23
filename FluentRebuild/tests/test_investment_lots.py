@@ -24,7 +24,7 @@ class InvestmentLotTests(unittest.TestCase):
 
     def test_schema_has_investment_tables(self) -> None:
         version = self.db.conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 20)
+        self.assertEqual(version, 21)
         tables = {
             row[0]
             for row in self.db.conn.execute(
@@ -177,6 +177,7 @@ class InvestmentLotTests(unittest.TestCase):
         conn.execute("ALTER TABLE category_rules DROP COLUMN amount_max")
         conn.execute("ALTER TABLE category_rules DROP COLUMN account_id")
         conn.execute("DROP TABLE app_notifications")
+        conn.execute("ALTER TABLE account_valuations DROP COLUMN cash")
         conn.execute("PRAGMA user_version = 15")
         conn.commit()
         conn.close()
@@ -184,7 +185,7 @@ class InvestmentLotTests(unittest.TestCase):
         repo = Repository(db)
         trades = repo.investment_trades(account_id)
         lots = repo.investment_lots(account_id)
-        self.assertEqual(repo.db.conn.execute("PRAGMA user_version").fetchone()[0], 20)
+        self.assertEqual(repo.db.conn.execute("PRAGMA user_version").fetchone()[0], 21)
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0].kind, "buy")
         self.assertEqual(trades[0].quantity_units, 2_000_000)

@@ -14,7 +14,7 @@ from .security import DatabaseLocked, is_encrypted_file, pragma_key, sqlcipher3
 DB_ERROR = (sqlite3.Error,) + ((sqlcipher3.DatabaseError,) if sqlcipher3 is not None else ())
 DB_INTEGRITY_ERROR = (sqlite3.IntegrityError,) + ((sqlcipher3.IntegrityError,) if sqlcipher3 is not None else ())
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -634,6 +634,29 @@ CREATE INDEX IF NOT EXISTS idx_notifications_unread
     ON app_notifications(read_at, created_at DESC);
 """
 
+SCHEMA_V21 = """
+ALTER TABLE account_valuations ADD COLUMN cash INTEGER;
+
+UPDATE account_valuations
+SET cash = value - COALESCE((
+    SELECT SUM((h.quantity_units * h.price + 500000) / 1000000)
+    FROM holdings h
+    WHERE h.account_id = account_valuations.account_id
+), 0);
+"""
+
+
+SCHEMA_V21_BACKFILL = """
+UPDATE account_valuations
+SET cash = value - COALESCE((
+    SELECT SUM((h.quantity_units * h.price + 500000) / 1000000)
+    FROM holdings h
+    WHERE h.account_id = account_valuations.account_id
+), 0)
+WHERE cash IS NULL;
+"""
+
+
 class Database:
     """Owns the SQLite connection and the schema lifecycle."""
 
@@ -756,6 +779,16 @@ class Database:
         if version < 20:
             conn.executescript(SCHEMA_V20)
             version = 20
+        if version < 21:
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(account_valuations)")
+            }
+            if "cash" in columns:
+                conn.executescript(SCHEMA_V21_BACKFILL)
+            else:
+                conn.executescript(SCHEMA_V21)
+            version = 21
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported database schema version: {version}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

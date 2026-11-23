@@ -79,6 +79,7 @@ class Account:
     balance: int = 0
     currency: str = "CNY"
     last_valuation: int | None = None
+    last_valuation_cash: int | None = None
     last_valuation_date: str = ""
     valuation_count: int = 0
     adjustment: int = 0

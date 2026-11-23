@@ -62,7 +62,7 @@ class SecurityTests(unittest.TestCase):
         key = unlock_key(config, "pw123456")
         db = Database(self.path, encryption_key=key)
         try:
-            self.assertEqual(db.conn.execute("PRAGMA user_version").fetchone()[0], 20)
+            self.assertEqual(db.conn.execute("PRAGMA user_version").fetchone()[0], 21)
             self.assertEqual(
                 db.conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0], 1
             )

@@ -17,12 +17,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'FinBoard Fluent'),
             StringStruct('FileDescription', 'FinBoard Fluent 财观 - Personal Finance'),
-            StringStruct('FileVersion', '5.7.0'),
+            StringStruct('FileVersion', '5.8.0'),
             StringStruct('InternalName', 'FinBoard Fluent'),
             StringStruct('LegalCopyright', 'Copyright (c) 2026 Urtaome0211'),
             StringStruct('OriginalFilename', 'FinBoardFluent.exe'),
             StringStruct('ProductName', 'FinBoard Fluent'),
-            StringStruct('ProductVersion', '5.7.0')
+            StringStruct('ProductVersion', '5.8.0')
           ]
         )
       ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 from ..fluent_controls import ComboBox, DateEdit, LineEdit, TableWidget
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QSignalBlocker, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -49,6 +49,7 @@ class TradeDialog(QDialog):
         self.service = service
         self.account = account
         self.holding = holding
+        self.holdings = service.holdings(account.id)
         self.setWindowTitle(t("记录投资流水"))
         self.setMinimumWidth(520)
         root = root_layout(self)
@@ -70,12 +71,6 @@ class TradeDialog(QDialog):
         form.setVerticalSpacing(11)
         self.holding_combo = ComboBox()
         self.holding_combo.setMinimumWidth(300)
-        for item in service.holdings(account.id):
-            self.holding_combo.addItem(
-                f"{item.name}{(' · ' + item.symbol) if item.symbol else ''} · "
-                f"{format_quantity(item.quantity_units)}",
-                item.id,
-            )
         self.name_input = LineEdit()
         self.name_input.setPlaceholderText(t("例如：沪深300ETF、苹果"))
         self.symbol_input = LineEdit()
@@ -94,7 +89,8 @@ class TradeDialog(QDialog):
         self.note_input = LineEdit()
         self.note_input.setPlaceholderText(t("可选备注"))
 
-        form.addRow(form_label(t("持仓")), self.holding_combo)
+        self.holding_label = form_label(t("持仓"))
+        form.addRow(self.holding_label, self.holding_combo)
         form.addRow(form_label(t("名称")), self.name_input)
         form.addRow(form_label(t("代码")), self.symbol_input)
         form.addRow(form_label(t("日期")), self.date_edit)
@@ -118,15 +114,13 @@ class TradeDialog(QDialog):
         self.save_button.clicked.connect(self._save)
         root.addLayout(footer)
 
+        self._populate_holdings(kind)
+        if holding is not None:
+            self._select_holding(holding)
         self.kind_control.changed.connect(self._kind_changed)
         self.holding_combo.currentIndexChanged.connect(self._holding_changed)
         for field in (self.quantity_input, self.price_input, self.fee_input, self.amount_input):
             field.textChanged.connect(self._update_preview)
-        if holding is not None:
-            self._select_holding(holding)
-        elif self.holding_combo.count():
-            self.holding_combo.setCurrentIndex(0)
-            self._holding_changed()
         self._kind_changed(kind)
 
     def _select_holding(self, holding: Holding) -> None:
@@ -135,19 +129,54 @@ class TradeDialog(QDialog):
                 self.holding_combo.setCurrentIndex(index)
                 return
 
+    def _populate_holdings(self, kind: str, keep_id: int | None = None) -> None:
+        with QSignalBlocker(self.holding_combo):
+            self.holding_combo.clear()
+            if kind == "buy":
+                self.holding_combo.addItem(t("手动填写新持仓"), None)
+            for item in self.holdings:
+                self.holding_combo.addItem(
+                    f"{item.name}{(' · ' + item.symbol) if item.symbol else ''} · "
+                    f"{format_quantity(item.quantity_units)}",
+                    item.id,
+                )
+            if kind == "buy":
+                index = self.holding_combo.findData(keep_id) if keep_id is not None else 0
+                self.holding_combo.setCurrentIndex(max(index, 0))
+            elif self.holdings:
+                index = self.holding_combo.findData(keep_id) if keep_id is not None else -1
+                self.holding_combo.setCurrentIndex(max(index, 0))
+            else:
+                self.holding_combo.setCurrentIndex(-1)
+
     def _holding_changed(self) -> None:
+        kind = str(self.kind_control.value())
         holding_id = self.holding_combo.currentData()
-        if holding_id is None:
+        if kind == "dividend":
+            self.name_input.setReadOnly(False)
+            self.symbol_input.setReadOnly(False)
+            self._update_preview()
             return
-        for item in self.service.holdings(self.account.id):
-            if item.id == holding_id:
-                self.name_input.setText(item.name)
-                self.symbol_input.setText(item.symbol)
-                if item.price:
-                    self.price_input.setText(f"{item.price / 100:.2f}")
-                if not self.quantity_input.text().strip():
-                    self.quantity_input.setText(format_quantity(item.quantity_units))
-                break
+        if holding_id is None:
+            if kind == "buy":
+                self.name_input.clear()
+                self.symbol_input.clear()
+                self.price_input.clear()
+                self.name_input.setReadOnly(False)
+                self.symbol_input.setReadOnly(False)
+            self._update_preview()
+            return
+        holding = next((item for item in self.holdings if item.id == holding_id), None)
+        if holding is None:
+            return
+        self.name_input.setText(holding.name)
+        self.symbol_input.setText(holding.symbol)
+        if holding.price:
+            self.price_input.setText(f"{holding.price / 100:.2f}")
+        if kind == "sell" and not self.quantity_input.text().strip():
+            self.quantity_input.setText(format_quantity(holding.quantity_units))
+        self.name_input.setReadOnly(kind in ("buy", "sell"))
+        self.symbol_input.setReadOnly(kind in ("buy", "sell"))
         self._update_preview()
 
     def _kind_changed(self, kind: object) -> None:
@@ -157,12 +186,17 @@ class TradeDialog(QDialog):
         self.price_input.setEnabled(is_trade)
         self.fee_input.setEnabled(is_trade)
         self.amount_input.setEnabled(kind == "dividend")
-        self.holding_combo.setEnabled(kind == "sell")
-        self.holding_combo.setVisible(kind == "sell")
+        self.holding_combo.setEnabled(is_trade)
+        self.holding_combo.setVisible(kind != "dividend")
+        self.holding_label.setVisible(kind != "dividend")
+        current = self.holding_combo.currentData()
+        self._populate_holdings(kind, current if isinstance(current, int) else None)
         if kind == "sell" and self.holding_combo.count() == 0:
+            self.name_input.clear()
+            self.symbol_input.clear()
             self.preview.setText(t("当前没有可卖出的持仓"))
         else:
-            self._update_preview()
+            self._holding_changed()
 
     def _update_preview(self) -> None:
         kind = str(self.kind_control.value())

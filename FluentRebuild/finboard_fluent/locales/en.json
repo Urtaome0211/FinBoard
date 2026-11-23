@@ -812,6 +812,7 @@
   "保存现金": "Save cash",
   "账户总值": "Total account value",
   "持仓": "Holdings",
+  "手动填写新持仓": "Enter a new holding manually",
   "现金 {cash} + 持仓 {holdings} = 账户总值 {total}": "Cash {cash} + holdings {holdings} = total {total}",
   "输入现金余额后显示账户总值": "Enter a cash balance to preview the account total",
   "现金余额不能为负数": "Cash balance cannot be negative",

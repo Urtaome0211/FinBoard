@@ -134,7 +134,7 @@ class SettingsPage(Page):
         )
         self.tray_control = SegmentedControl(
             [("启用", True), ("停用", False)],
-            self.window.settings.value("tray/enabled", True, type=bool),
+            self.window.settings.value("tray/enabled", False, type=bool),
         )
         self.tray_control.setFixedWidth(180)
         self.tray_control.changed.connect(self._tray_changed)
@@ -146,7 +146,7 @@ class SettingsPage(Page):
         )
         self.reminders_control = SegmentedControl(
             [("启用", True), ("停用", False)],
-            self.window.settings.value("reminders/enabled", True, type=bool),
+            self.window.settings.value("reminders/enabled", False, type=bool),
         )
         self.reminders_control.setFixedWidth(180)
         self.reminders_control.changed.connect(self._reminders_changed)

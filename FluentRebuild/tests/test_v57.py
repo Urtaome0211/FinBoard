@@ -36,10 +36,10 @@ class V57Tests(unittest.TestCase):
         self.db.close()
         self.tmp.cleanup()
 
-    def test_schema_is_20(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 20)
+    def test_schema_is_21(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 21)
         version = self.db.conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 20)
+        self.assertEqual(version, 21)
 
     def test_recovery_key_roundtrip(self) -> None:
         master = "ab" * 32

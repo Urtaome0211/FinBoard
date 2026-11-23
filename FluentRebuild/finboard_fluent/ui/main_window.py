@@ -557,7 +557,7 @@ class MainWindow(FluentWindow):
 
     # ------------------------------------------------------------------ tray
     def _build_tray(self) -> None:
-        if not self.settings.value("tray/enabled", True, type=bool):
+        if not self.settings.value("tray/enabled", False, type=bool):
             return
         if self._tray is not None or not QSystemTrayIcon.isSystemTrayAvailable():
             return
@@ -619,7 +619,7 @@ class MainWindow(FluentWindow):
             self._tray_menu = None
 
     def _check_reminders(self) -> None:
-        if not self.settings.value("reminders/enabled", True, type=bool):
+        if not self.settings.value("reminders/enabled", False, type=bool):
             return
         messages: list[str] = []
         try:
@@ -896,7 +896,7 @@ class MainWindow(FluentWindow):
             not self._quitting
             and self._tray is not None
             and self._tray.isVisible()
-            and self.settings.value("tray/enabled", True, type=bool)
+            and self.settings.value("tray/enabled", False, type=bool)
         ):
             event.ignore()
             self.hide()

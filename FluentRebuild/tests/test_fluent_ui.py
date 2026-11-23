@@ -18,6 +18,7 @@ from finboard_fluent.core.service import FinanceService  # noqa: E402
 from finboard_fluent.i18n import set_language  # noqa: E402
 from finboard_fluent.ui.fluent_controls import DateEdit, LineEdit  # noqa: E402
 from finboard_fluent.ui.dialogs.prompt import TextPromptDialog  # noqa: E402
+from finboard_fluent.ui.dialogs.investment_trade import TradeDialog  # noqa: E402
 from finboard_fluent.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -58,6 +59,12 @@ class FluentShellTests(unittest.TestCase):
         self.window.switchTo(self.window.pages["reports"])
         self.app.processEvents()
         self.assertEqual(self.window.current_key, "reports")
+
+    def test_tray_and_reminders_default_off(self) -> None:
+        page = self.window.pages["settings"]
+        self.assertFalse(page.tray_control.value())
+        self.assertFalse(page.reminders_control.value())
+        self.assertIsNone(self.window._tray)
 
     def test_language_switch_updates_shell(self) -> None:
         page = self.window.pages["settings"]
@@ -102,6 +109,52 @@ class FluentShellTests(unittest.TestCase):
         self.assertEqual(edit.getDate(), QDate(2026, 11, 6))
         line = LineEdit("hello")
         self.assertEqual(line.text(), "hello")
+
+    def test_trade_dialog_existing_or_manual_buy(self) -> None:
+        account_id = self.repo.add_account("证券账户", "investment", 0)
+        self.repo.record_investment_trade(
+            account_id,
+            kind="buy",
+            symbol="AAPL",
+            name="苹果",
+            trade_date="2026-11-01",
+            quantity_units=1_000_000,
+            price=20_000,
+        )
+        account = self.repo.get_account(account_id)
+        dialog = TradeDialog(self.service, account, kind="buy")
+        self.assertEqual(dialog.holding_combo.count(), 2)
+        self.assertEqual(dialog.holding_combo.itemText(0), "手动填写新持仓")
+        self.assertIsNone(dialog.holding_combo.itemData(0))
+        self.assertIn("苹果", dialog.holding_combo.itemText(1))
+
+        dialog.holding_combo.setCurrentIndex(1)
+        self.app.processEvents()
+        self.assertEqual(dialog.name_input.text(), "苹果")
+        self.assertEqual(dialog.symbol_input.text(), "AAPL")
+        self.assertEqual(dialog.price_input.text(), "200.00")
+        self.assertEqual(dialog.quantity_input.text(), "")
+        self.assertTrue(dialog.name_input.isReadOnly())
+        self.assertTrue(dialog.symbol_input.isReadOnly())
+
+        dialog.holding_combo.setCurrentIndex(0)
+        self.app.processEvents()
+        self.assertEqual(dialog.name_input.text(), "")
+        self.assertEqual(dialog.symbol_input.text(), "")
+        self.assertFalse(dialog.name_input.isReadOnly())
+        self.assertFalse(dialog.symbol_input.isReadOnly())
+
+        dialog.holding_combo.setCurrentIndex(1)
+        self.app.processEvents()
+        dialog.quantity_input.setText("2")
+        dialog.price_input.setText("210.00")
+        dialog._save()
+        self.app.processEvents()
+        holdings = self.service.holdings(account_id)
+        self.assertEqual(len(holdings), 1)
+        self.assertEqual(holdings[0].quantity_units, 3_000_000)
+        dialog.deleteLater()
+        self.app.processEvents()
 
     def test_fluent_text_prompt(self) -> None:
         dialog = TextPromptDialog(

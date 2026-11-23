@@ -195,6 +195,11 @@ class Repository:
                 if row["last_valuation"] is not None
                 else None
             ),
+            last_valuation_cash=(
+                int(row["last_valuation_cash"])
+                if row["last_valuation_cash"] is not None
+                else None
+            ),
             last_valuation_date=row["last_valuation_date"] or "",
             valuation_count=int(row["valuation_count"] or 0),
             adjustment=int(row["adjustment"] or 0),
@@ -278,11 +283,13 @@ class Repository:
                    a.currency, a.adjustment, a.is_system,
                    vc.valuation_count AS valuation_count,
                    lv.value AS last_valuation,
+                   lv.cash AS last_valuation_cash,
                    lv.date AS last_valuation_date,
                    COALESCE(hv.market, 0) AS holdings_value,
                    CASE
                        WHEN a.type = 'investment' AND lv.value IS NOT NULL
-                       THEN lv.value + a.adjustment + COALESCE(SUM(CASE
+                       THEN COALESCE(lv.cash, lv.value - COALESCE(hv.market, 0))
+                            + a.adjustment + COALESCE(SUM(CASE
                            WHEN t.date > lv.date
                                 AND t.kind = 'income'   AND t.account_id    = a.id
                                 THEN  t.account_amount
@@ -297,7 +304,7 @@ class Repository:
                            WHEN t.date > lv.date
                                 AND t.kind = 'transfer' AND t.to_account_id = a.id
                                 THEN  t.to_amount
-                           ELSE 0 END), 0)
+                           ELSE 0 END), 0) + COALESCE(hv.market, 0)
                        ELSE a.opening_balance + a.adjustment + COALESCE(SUM(CASE
                            WHEN t.kind = 'income'   AND t.account_id    = a.id THEN  t.account_amount
                            WHEN t.kind = 'expense'  AND t.account_id    = a.id THEN -t.account_amount
@@ -1709,14 +1716,24 @@ class Repository:
         self, account_id: int, day: str, value: int, note: str = ""
     ) -> int:
         day, value = self._validate_valuation(account_id, day, value)
+        market = int(
+            self.conn.execute(
+                "SELECT COALESCE(SUM((quantity_units * price + 500000) / 1000000), 0)"
+                " FROM holdings WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()[0]
+        )
+        cash = value - market
         note = str(note or "").strip()[:200]
         try:
             self.conn.execute(
-                "INSERT INTO account_valuations (account_id, date, value, note, created_at)"
-                " VALUES (?, ?, ?, ?, ?)"
+                "INSERT INTO account_valuations"
+                " (account_id, date, value, cash, note, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(account_id, date) DO UPDATE SET"
-                " value = excluded.value, note = excluded.note",
-                (account_id, day, value, note, now_iso()),
+                " value = excluded.value, cash = excluded.cash,"
+                " note = excluded.note",
+                (account_id, day, value, cash, note, now_iso()),
             )
             self.conn.commit()
         except DB_INTEGRITY_ERROR:
@@ -1743,10 +1760,18 @@ class Repository:
         ).fetchone()
         if duplicate:
             raise ValueError("该日期已有市值记录，请直接编辑那一条")
+        market = int(
+            self.conn.execute(
+                "SELECT COALESCE(SUM((quantity_units * price + 500000) / 1000000), 0)"
+                " FROM holdings WHERE account_id = ?",
+                (int(row["account_id"]),),
+            ).fetchone()[0]
+        )
         note = str(note or "").strip()[:200]
         self.conn.execute(
-            "UPDATE account_valuations SET date = ?, value = ?, note = ? WHERE id = ?",
-            (day, value, note, valuation_id),
+            "UPDATE account_valuations"
+            " SET date = ?, value = ?, cash = ?, note = ? WHERE id = ?",
+            (day, value, value - market, note, valuation_id),
         )
         self.conn.commit()
 
